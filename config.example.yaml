@@ -34,8 +34,15 @@ api:
 providers:
   subfinder:
     enabled: true
-    # all: true       # use all passive sources
-    # recursive: true # recursive enumeration
+    timeout: 30        # minutes — per-source HTTP timeout
+    # all: true        # use all passive sources
+    # recursive: true  # recursive enumeration
+
+  amass:
+    enabled: true
+    timeout: 30        # minutes — overall enumeration timeout
+    # amass runs in passive mode (-passive) alongside subfinder
+    # both run in parallel, results are merged and deduplicated
 
   dnsx:
     enabled: true

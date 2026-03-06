@@ -14,8 +14,8 @@ var Stages = []Stage{
 	{
 		Name:      "enum",
 		Desc:      "Subdomain enumeration",
-		Providers: []string{"subfinder"},
-		Parallel:  false,
+		Providers: []string{"subfinder", "amass"},
+		Parallel:  true,
 	},
 	{
 		Name:      "resolve",

@@ -17,17 +17,18 @@ func (s *Subfinder) OutputType() string { return "subdomains" }
 func (s *Subfinder) Check() error       { return CheckBinary("subfinder") }
 
 func (s *Subfinder) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
+	extra := opts.Config
+	timeout := config.GetInt(extra, "timeout", 30) // minutes, subfinder default
+
 	args := []string{
 		"-dL", opts.Input,
 		"-all",
 		"-recursive",
 		"-t", strconv.Itoa(opts.Res.ThreadsHeavy),
-		"-timeout", strconv.Itoa(int(opts.Res.TimeoutScan.Seconds())),
+		"-timeout", strconv.Itoa(timeout),
 		"-o", opts.Output,
 	}
 
-	// Config overrides
-	extra := opts.Config
 	if config.GetBool(extra, "silent", true) {
 		args = append(args, "-silent")
 	}

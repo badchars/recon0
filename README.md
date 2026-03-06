@@ -1,9 +1,9 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/Go-1.24-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/CDP-Chromium-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="CDP">
-  <img src="https://img.shields.io/badge/Providers-12-blueviolet?style=flat-square" alt="Providers">
+  <img src="https://img.shields.io/badge/Providers-13-blueviolet?style=flat-square" alt="Providers">
   <img src="https://img.shields.io/badge/DSL_Rules-60+-orange?style=flat-square" alt="DSL Rules">
 </p>
 
@@ -53,7 +53,7 @@ recon0 run target.com
      |
      v
  ┌────────────────────────────────────────────────────────────────────────────┐
- │  1. ENUM           subfinder         Passive subdomain enumeration        │
+ │  1. ENUM           subfinder+amass   Passive subdomain enumeration        │
  │  2. RESOLVE        dnsx          ◄── DNS gate: 0 results = stop          │
  │  3. PROBE          httpx + tlsx      HTTP probing, tech fingerprint, TLS │
  │  4. CRAWL          cdpcrawl          Headless Chrome + HAR + JS capture  │
@@ -117,6 +117,7 @@ go install github.com/projectdiscovery/httpx/cmd/httpx@latest
 go install github.com/projectdiscovery/tlsx/cmd/tlsx@latest
 go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest
 go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+go install github.com/owasp-amass/amass/v4/...@master
 
 # Run
 ./recon0 run target.com
@@ -146,6 +147,7 @@ $ recon0 providers
 
   Provider       Stage        Status     Binary
   ──────────────────────────────────────────────────
+  amass          enum         enabled    /usr/local/bin/amass
   subfinder      enum         enabled    /usr/local/bin/subfinder
   dnsx           resolve      enabled    /usr/local/bin/dnsx
   httpx          probe        enabled    /usr/local/bin/httpx
@@ -229,6 +231,7 @@ recon0 status --remote 10.0.0.5:9090
 | Provider | Stage | Tool | Purpose |
 |----------|-------|------|---------|
 | `subfinder` | enum | [subfinder](https://github.com/projectdiscovery/subfinder) | Passive subdomain enumeration from 100+ sources |
+| `amass` | enum | [amass](https://github.com/owasp-amass/amass) | OWASP subdomain enumeration — DNS, scraping, certificates, APIs |
 | `dnsx` | resolve | [dnsx](https://github.com/projectdiscovery/dnsx) | DNS resolution, A/AAAA/CNAME records, takeover checks |
 | `httpx` | probe | [httpx](https://github.com/projectdiscovery/httpx) | HTTP probing, status codes, tech fingerprinting, CDN detection |
 | `tlsx` | probe | [tlsx](https://github.com/projectdiscovery/tlsx) | TLS certificate extraction, SAN enumeration, expiry checks |

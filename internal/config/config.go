@@ -72,7 +72,8 @@ func Defaults() *Config {
 			Listen:  "0.0.0.0",
 		},
 		Providers: map[string]ProviderConfig{
-			"subfinder": {Enabled: boolPtr(true)},
+			"subfinder": {Enabled: boolPtr(true), Extra: map[string]any{"timeout": 30}},
+			"amass":     {Enabled: boolPtr(true), Extra: map[string]any{"timeout": 30}},
 			"dnsx":      {Enabled: boolPtr(true)},
 			"httpx":     {Enabled: boolPtr(true), Extra: map[string]any{"ports": []any{80, 443, 8080, 8443, 8000, 8888, 3000, 5000, 9090}}},
 			"tlsx":      {Enabled: boolPtr(true)},
