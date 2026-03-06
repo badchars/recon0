@@ -53,6 +53,8 @@ func main() {
 		cmdProviders()
 	case "update":
 		cmdUpdate()
+	case "uninstall":
+		cmdUninstall()
 	case "version":
 		fmt.Printf("recon0 %s\n", version)
 	case "help", "-h", "--help":
@@ -75,6 +77,7 @@ func printUsage() {
 	fmt.Println("  recon0 list                                             List all runs")
 	fmt.Println("  recon0 providers                                        List providers")
 	fmt.Println("  recon0 update [--check]                                  Self-update to latest release")
+	fmt.Println("  recon0 uninstall [--purge]                               Remove recon0 binary and data")
 	fmt.Println("  recon0 version                                          Show version")
 }
 
@@ -640,6 +643,93 @@ func cmdUpdate() {
 	}
 
 	fmt.Printf("Updated to %s\n", release.TagName)
+}
+
+// ── uninstall ──
+
+func cmdUninstall() {
+	purge := false
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == "--purge" {
+			purge = true
+		}
+	}
+
+	execPath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot determine executable path: %v\n", err)
+		os.Exit(1)
+	}
+	execPath, _ = filepath.EvalSymlinks(execPath)
+
+	fmt.Println("recon0 uninstall")
+	fmt.Println()
+	fmt.Printf("  Binary:  %s\n", execPath)
+
+	// Detect data directories relative to binary or config
+	cfg, _ := config.Load("")
+	runsDir := ""
+	if cfg != nil {
+		abs, err := filepath.Abs(cfg.OutputDir)
+		if err == nil {
+			runsDir = abs
+		}
+	}
+
+	if purge && runsDir != "" {
+		fmt.Printf("  Data:    %s\n", runsDir)
+	}
+
+	fmt.Println()
+
+	if !purge {
+		fmt.Println("This will remove the recon0 binary.")
+		fmt.Println("Scan data in runs/ will NOT be deleted.")
+		fmt.Println("Use --purge to also remove all scan data.")
+	} else {
+		fmt.Println("This will remove the recon0 binary AND all scan data.")
+	}
+
+	fmt.Println()
+	fmt.Print("Continue? [y/N] ")
+
+	var answer string
+	fmt.Scanln(&answer)
+	answer = strings.ToLower(strings.TrimSpace(answer))
+	if answer != "y" && answer != "yes" {
+		fmt.Println("Cancelled.")
+		return
+	}
+
+	// Remove scan data if --purge
+	if purge && runsDir != "" {
+		if _, err := os.Stat(runsDir); err == nil {
+			fmt.Printf("Removing %s...\n", runsDir)
+			if err := os.RemoveAll(runsDir); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not remove %s: %v\n", runsDir, err)
+			}
+		}
+	}
+
+	// Remove config file if --purge
+	if purge {
+		for _, name := range []string{"recon0.yaml", "config.yaml"} {
+			if _, err := os.Stat(name); err == nil {
+				fmt.Printf("Removing %s...\n", name)
+				os.Remove(name)
+			}
+		}
+	}
+
+	// Remove binary (must be last — we're deleting ourselves)
+	fmt.Printf("Removing %s...\n", execPath)
+	if err := os.Remove(execPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot remove binary: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Try: sudo recon0 uninstall\n")
+		os.Exit(1)
+	}
+
+	fmt.Println("recon0 has been uninstalled.")
 }
 
 // ── update helpers ──
