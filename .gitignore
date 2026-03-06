@@ -1,0 +1,27 @@
+# Binary
+recon0
+/dist/
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runs (scan output — don't commit)
+runs/
+
+# Config with secrets
+recon0.yaml
+*.env

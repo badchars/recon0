@@ -1,0 +1,112 @@
+# ══════════════════════════════════════════
+# recon0 Configuration
+# ══════════════════════════════════════════
+# Copy this file to recon0.yaml and customize.
+
+# General
+output_dir: ./runs
+resume: true
+disk_min_gb: 20
+url_cap: 2000000
+
+# Resource management
+resources:
+  auto: true # auto-detect CPU/RAM (cgroup-aware)
+  max_threads: 0 # 0 = unlimited (auto)
+  max_rate: 5000 # global max requests/sec
+
+# Logging
+log:
+  level: info # debug | info | warn | error
+  format: color # color | json | plain
+  file: true # write pipeline.log
+
+# Status API + Job Queue
+api:
+  enabled: true
+  port: 8484
+  listen: 0.0.0.0 # 127.0.0.1 for local only
+
+# ── Providers ──
+# Each provider: enabled + tool-specific parameters
+# enabled: false → provider won't run but stays registered
+
+providers:
+  subfinder:
+    enabled: true
+    # all: true       # use all passive sources
+    # recursive: true # recursive enumeration
+
+  dnsx:
+    enabled: true
+    # retry: 3
+    # record_types: [a, aaaa, cname]
+    # takeover_check: true
+
+  httpx:
+    enabled: true
+    ports: [80, 443, 8080, 8443, 8000, 8081, 8888, 3000, 5000, 9090]
+    # store_response: true
+    # follow_redirect: true
+
+  tlsx:
+    enabled: true
+    # san: true
+    # jarm: true
+
+  cdpcrawl:
+    enabled: true
+    headless: true           # false = visible browser (debug)
+    timeout_per_page: 30s
+    click_depth: 2           # rounds of page interaction
+    max_concurrent_tabs: 5   # concurrent browser tabs
+    user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+    viewport_width: 1920
+    viewport_height: 1080
+
+  naabu:
+    enabled: true
+    top_ports: 100
+    # scan_type: s    # SYN scan (needs NET_RAW)
+
+  discover:
+    enabled: true
+    # Parses HAR files + JS files for endpoint discovery
+    # No external binary needed
+
+  analyzer:
+    enabled: true
+    # custom_rules: /path/to/custom-rules.yaml
+    # DSL engine with ~60 built-in rules for secrets, headers, paths
+
+  collector:
+    enabled: true
+    llm_enabled: false       # optional LLM enrichment
+    llm_provider: openai     # openai | ollama
+    llm_model: gpt-4o
+    llm_api_key: ""          # or set RECON0_LLM_API_KEY env var
+    llm_base_url: ""         # ollama: http://localhost:11434/v1
+    llm_max_tokens: 4096
+
+  activeprobe:
+    enabled: true            # lightweight Go-native HTTP prober
+    timeout: 10s             # HTTP request timeout per probe
+    max_concurrent: 20       # concurrent probe workers
+    skip_generic: false      # skip generic probes (/.env, /.git, etc.)
+    skip_cors: false         # skip CORS misconfiguration check
+    # Probes run based on httpx tech fingerprints:
+    #   Generic: .env, .git, server-status (all hosts)
+    #   Spring Boot: actuator endpoints (Java/Spring hosts)
+    #   WordPress: wp-config backups, xmlrpc, user enum
+    #   Node.js: package.json, GraphQL introspection
+    #   Laravel/PHP: debug logs, telescope, phpinfo
+    #   Django: admin panel, debug toolbar
+    #   .NET: elmah, trace, web.config
+    #   Go: pprof, expvar debug endpoints
+    #   CORS: origin reflection check
+
+  nuclei:
+    enabled: false # run manually on filtered targets
+    severity: [medium, high, critical]
+    # custom_templates: ~/nuclei-custom/
+    # exclude_tags: [dos, fuzz]

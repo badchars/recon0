@@ -1,0 +1,10 @@
+recon0
+recon0-linux-amd64
+runs/
+dist/
+.git/
+.gitignore
+*.md
+.env
+.env.*
+config.yaml
