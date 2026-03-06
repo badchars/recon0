@@ -1,8 +1,12 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -46,6 +51,8 @@ func main() {
 		cmdList()
 	case "providers":
 		cmdProviders()
+	case "update":
+		cmdUpdate()
 	case "version":
 		fmt.Printf("recon0 %s\n", version)
 	case "help", "-h", "--help":
@@ -67,6 +74,7 @@ func printUsage() {
 	fmt.Println("  recon0 status [RUN_ID] [--remote HOST]                  Show scan status")
 	fmt.Println("  recon0 list                                             List all runs")
 	fmt.Println("  recon0 providers                                        List providers")
+	fmt.Println("  recon0 update [--check]                                  Self-update to latest release")
 	fmt.Println("  recon0 version                                          Show version")
 }
 
@@ -498,6 +506,250 @@ func cmdProviders() {
 
 		fmt.Printf("  %-14s %-12s %-10s %-20s\n", p.Name(), p.Stage(), status, binary)
 	}
+}
+
+// ── update: self-update from GitHub Releases ──
+
+const updateRepo = "badchars/recon0"
+
+func cmdUpdate() {
+	checkOnly := false
+	for i := 2; i < len(os.Args); i++ {
+		if os.Args[i] == "--check" || os.Args[i] == "-n" {
+			checkOnly = true
+		}
+	}
+
+	// Container detection
+	if isContainer() {
+		fmt.Println("Warning: running inside a container — self-update is not recommended.")
+		fmt.Println("Rebuild the Docker image instead: docker build -t recon0 .")
+		if !checkOnly {
+			os.Exit(1)
+		}
+	}
+
+	fmt.Printf("Current version: %s\n", version)
+	fmt.Printf("Checking for updates...\n")
+
+	// Fetch latest release from GitHub API
+	release, err := fetchLatestRelease()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to check for updates: %v\n", err)
+		os.Exit(1)
+	}
+
+	latest := strings.TrimPrefix(release.TagName, "v")
+	current := strings.TrimPrefix(version, "v")
+
+	if current == latest || version == release.TagName {
+		fmt.Printf("Already up to date (%s)\n", release.TagName)
+		return
+	}
+
+	fmt.Printf("New version available: %s → %s\n", version, release.TagName)
+
+	if checkOnly {
+		fmt.Printf("Run 'recon0 update' to install.\n")
+		return
+	}
+
+	// Find the correct asset for this OS/ARCH
+	assetName := fmt.Sprintf("recon0-%s-%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+	var assetURL string
+	for _, a := range release.Assets {
+		if a.Name == assetName {
+			assetURL = a.BrowserDownloadURL
+			break
+		}
+	}
+	if assetURL == "" {
+		fmt.Fprintf(os.Stderr, "No release asset found for %s/%s (%s)\n", runtime.GOOS, runtime.GOARCH, assetName)
+		fmt.Fprintf(os.Stderr, "Available assets:\n")
+		for _, a := range release.Assets {
+			fmt.Fprintf(os.Stderr, "  - %s\n", a.Name)
+		}
+		os.Exit(1)
+	}
+
+	// Find checksums file
+	var checksumURL string
+	for _, a := range release.Assets {
+		if a.Name == "checksums.txt" {
+			checksumURL = a.BrowserDownloadURL
+			break
+		}
+	}
+
+	// Download the asset
+	fmt.Printf("Downloading %s...\n", assetName)
+	tarData, err := downloadURL(assetURL)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Download failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Verify checksum
+	if checksumURL != "" {
+		fmt.Printf("Verifying checksum...\n")
+		checksumData, err := downloadURL(checksumURL)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not download checksums: %v\n", err)
+		} else {
+			actualHash := sha256sum(tarData)
+			expectedHash := findChecksum(string(checksumData), assetName)
+			if expectedHash == "" {
+				fmt.Fprintf(os.Stderr, "Warning: asset not found in checksums.txt\n")
+			} else if actualHash != expectedHash {
+				fmt.Fprintf(os.Stderr, "Checksum mismatch!\n")
+				fmt.Fprintf(os.Stderr, "  expected: %s\n", expectedHash)
+				fmt.Fprintf(os.Stderr, "  got:      %s\n", actualHash)
+				os.Exit(1)
+			} else {
+				fmt.Printf("Checksum OK (%s)\n", actualHash[:16]+"...")
+			}
+		}
+	}
+
+	// Extract binary from tarball
+	binary, err := extractFromTarGz(tarData, "recon0")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Extract failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Replace current executable (atomic: write temp → rename)
+	execPath, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot determine executable path: %v\n", err)
+		os.Exit(1)
+	}
+	execPath, _ = filepath.EvalSymlinks(execPath)
+
+	tmpPath := execPath + ".update"
+	if err := os.WriteFile(tmpPath, binary, 0755); err != nil {
+		fmt.Fprintf(os.Stderr, "Cannot write update: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := os.Rename(tmpPath, execPath); err != nil {
+		os.Remove(tmpPath)
+		fmt.Fprintf(os.Stderr, "Cannot replace binary: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Try: sudo recon0 update\n")
+		os.Exit(1)
+	}
+
+	fmt.Printf("Updated to %s\n", release.TagName)
+}
+
+// ── update helpers ──
+
+type ghRelease struct {
+	TagName string    `json:"tag_name"`
+	Assets  []ghAsset `json:"assets"`
+}
+
+type ghAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}
+
+func fetchLatestRelease() (*ghRelease, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", updateRepo)
+	req, _ := http.NewRequest("GET", url, nil)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "recon0/"+version)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		return nil, fmt.Errorf("no releases found for %s", updateRepo)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var release ghRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	return &release, nil
+}
+
+func downloadURL(url string) ([]byte, error) {
+	client := &http.Client{Timeout: 5 * time.Minute}
+	resp, err := client.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	return io.ReadAll(io.LimitReader(resp.Body, 100*1024*1024)) // 100MB limit
+}
+
+func sha256sum(data []byte) string {
+	h := sha256.Sum256(data)
+	return hex.EncodeToString(h[:])
+}
+
+func findChecksum(checksums, filename string) string {
+	for _, line := range strings.Split(checksums, "\n") {
+		parts := strings.Fields(line)
+		if len(parts) == 2 && parts[1] == filename {
+			return parts[0]
+		}
+	}
+	return ""
+}
+
+func extractFromTarGz(data []byte, targetName string) ([]byte, error) {
+	gzr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("gzip: %w", err)
+	}
+	defer gzr.Close()
+
+	tr := tar.NewReader(gzr)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("tar: %w", err)
+		}
+		// Match the binary name (may be in a subdirectory)
+		base := filepath.Base(hdr.Name)
+		if base == targetName && hdr.Typeflag == tar.TypeReg {
+			return io.ReadAll(tr)
+		}
+	}
+	return nil, fmt.Errorf("binary '%s' not found in archive", targetName)
+}
+
+func isContainer() bool {
+	// Check /.dockerenv
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	// Check cgroup for docker/lxc/kubepods
+	data, err := os.ReadFile("/proc/1/cgroup")
+	if err == nil {
+		s := string(data)
+		if strings.Contains(s, "docker") || strings.Contains(s, "lxc") || strings.Contains(s, "kubepods") {
+			return true
+		}
+	}
+	return false
 }
 
 // ── helpers ──

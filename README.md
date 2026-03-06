@@ -175,6 +175,7 @@ Usage:
   recon0 status [RUN_ID] [flags]    Show scan status
   recon0 list                       List all runs
   recon0 providers                  List registered providers
+  recon0 update [--check]           Self-update to latest release
   recon0 version                    Show version
 ```
 
@@ -700,6 +701,36 @@ resources:
 ```
 
 cgroup v1/v2 aware — works correctly inside Docker and Kubernetes.
+
+---
+
+## Updating
+
+```bash
+# Check if a new version is available
+recon0 update --check
+
+# Download and install the latest release
+recon0 update
+```
+
+Self-update downloads the correct binary for your OS/architecture from [GitHub Releases](https://github.com/badchars/recon0/releases), verifies the SHA256 checksum, and replaces the current binary atomically.
+
+Supported platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`.
+
+> Container environments are detected automatically — use `docker build` to update instead.
+
+---
+
+## Releasing
+
+Releases are automated via [GoReleaser](https://goreleaser.com/) and GitHub Actions:
+
+```bash
+git tag v0.2.0
+git push --tags
+# → GitHub Actions builds cross-platform binaries and creates a release
+```
 
 ---
 

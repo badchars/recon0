@@ -1,0 +1,38 @@
+version: 2
+
+builds:
+  - main: ./cmd/recon0
+    binary: recon0
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    name_template: "recon0-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+release:
+  github:
+    owner: badchars
+    name: recon0
+  draft: false
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"

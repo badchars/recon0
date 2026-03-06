@@ -8,7 +8,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /recon0 ./cmd/recon0
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w -X main.version=${VERSION}" -o /recon0 ./cmd/recon0
 
 # ── Stage 2: Install Go security tools ──
 FROM golang:1.23-bookworm AS tools
