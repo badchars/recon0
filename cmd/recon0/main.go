@@ -38,7 +38,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	switch os.Args[1] {
+	// Background update check (non-blocking, only for interactive commands)
+	var updateMsg chan string
+	cmd := os.Args[1]
+	switch cmd {
+	case "run", "serve", "scan", "status", "list", "providers", "version":
+		updateMsg = checkUpdateBackground()
+	}
+
+	switch cmd {
 	case "run":
 		cmdRun()
 	case "serve":
@@ -63,6 +71,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", os.Args[1])
 		printUsage()
 		os.Exit(1)
+	}
+
+	// Show update notice if available (non-blocking: skip if check hasn't finished)
+	if updateMsg != nil {
+		select {
+		case msg := <-updateMsg:
+			if msg != "" {
+				fmt.Fprintln(os.Stderr, msg)
+			}
+		default:
+		}
 	}
 }
 
@@ -730,6 +749,50 @@ func cmdUninstall() {
 	}
 
 	fmt.Println("recon0 has been uninstalled.")
+}
+
+// ── update check ──
+
+// checkUpdateBackground starts a goroutine that checks for updates.
+// Returns a channel that will receive a message string (empty if up to date).
+// The check has a 3-second timeout so it never delays the main command.
+func checkUpdateBackground() chan string {
+	ch := make(chan string, 1)
+	go func() {
+		if version == "dev" {
+			ch <- ""
+			return
+		}
+
+		client := &http.Client{Timeout: 3 * time.Second}
+		url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", updateRepo)
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("Accept", "application/vnd.github+json")
+		req.Header.Set("User-Agent", "recon0/"+version)
+
+		resp, err := client.Do(req)
+		if err != nil || resp.StatusCode != 200 {
+			ch <- ""
+			return
+		}
+		defer resp.Body.Close()
+
+		var release ghRelease
+		if json.NewDecoder(resp.Body).Decode(&release) != nil {
+			ch <- ""
+			return
+		}
+
+		latest := strings.TrimPrefix(release.TagName, "v")
+		current := strings.TrimPrefix(version, "v")
+		if current == latest || version == release.TagName {
+			ch <- ""
+			return
+		}
+
+		ch <- fmt.Sprintf("\n\033[33m[!] Update available: %s → %s — run 'recon0 update' to install\033[0m", version, release.TagName)
+	}()
+	return ch
 }
 
 // ── update helpers ──
