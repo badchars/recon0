@@ -100,6 +100,33 @@ recon0 run target.com
 
 ---
 
+## Installation
+
+### One-liner (recommended)
+
+```bash
+curl -sSL https://raw.githubusercontent.com/badchars/recon0/main/install.sh | bash
+```
+
+Detects OS/architecture, downloads the latest release, verifies SHA256 checksum, installs to `/usr/local/bin/`.
+
+### Go Install
+
+```bash
+go install github.com/badchars/recon0/cmd/recon0@latest
+```
+
+### Manual Download
+
+Grab the binary for your platform from [Releases](https://github.com/badchars/recon0/releases):
+
+```bash
+curl -sL https://github.com/badchars/recon0/releases/latest/download/recon0-linux-amd64.tar.gz | tar xz
+sudo mv recon0 /usr/local/bin/
+```
+
+---
+
 ## Quick Start
 
 ### From Source
