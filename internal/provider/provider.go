@@ -25,12 +25,13 @@ type Provider interface {
 
 // RunOpts holds runtime parameters passed to a provider.
 type RunOpts struct {
-	Input   string
-	Output  string
-	WorkDir string
-	LogDir  string
-	Config  map[string]any
-	Res     *config.Resources
+	Input        string
+	Output       string
+	ProgressFile string // file to monitor for progress (defaults to Output)
+	WorkDir      string
+	LogDir       string
+	Config       map[string]any
+	Res          *config.Resources
 }
 
 // Result holds the outcome of a provider run.
@@ -140,8 +141,8 @@ func RunProvider(ctx context.Context, p Provider, opts *RunOpts, state StateUpda
 	})
 	state.UpdateProvider(stageName, provName, "running", 0, 0, "")
 
-	// Start live progress monitor
-	stopProgress := startProgressMonitor(ctx, opts.Output, provName, stageName, logger, state, progCtx)
+	// Start live progress monitor (reads opts.ProgressFile dynamically — providers may set it during Run)
+	stopProgress := startProgressMonitor(ctx, opts, provName, stageName, logger, state, progCtx)
 
 	start := time.Now()
 	result, err := p.Run(ctx, opts)
@@ -175,7 +176,8 @@ func RunProvider(ctx context.Context, p Provider, opts *RunOpts, state StateUpda
 }
 
 // startProgressMonitor watches the output file and logs progress every 5 seconds.
-func startProgressMonitor(ctx context.Context, outputFile, provName, stageName string,
+// It dynamically checks opts.ProgressFile each tick, so providers can set it during Run().
+func startProgressMonitor(ctx context.Context, opts *RunOpts, provName, stageName string,
 	logger Logger, state StateUpdater, progCtx *ProgressContext) func() {
 
 	done := make(chan struct{})
@@ -192,7 +194,13 @@ func startProgressMonitor(ctx context.Context, outputFile, provName, stageName s
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				count := LineCount(outputFile)
+				// Resolve progress file dynamically (providers may set ProgressFile during Run)
+				file := opts.Output
+				if opts.ProgressFile != "" {
+					file = opts.ProgressFile
+				}
+
+				count := LineCount(file)
 				elapsed := int(time.Since(start).Seconds())
 
 				if count != lastCount {

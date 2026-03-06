@@ -20,6 +20,7 @@ func (h *Httpx) Check() error       { return CheckBinary("httpx") }
 
 func (h *Httpx) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 	jsonOut := opts.Output + ".json"
+	opts.ProgressFile = jsonOut // monitor JSON output for live progress
 	extra := opts.Config
 	responsesDir := filepath.Join(opts.WorkDir, "responses")
 
