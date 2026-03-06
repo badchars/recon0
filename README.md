@@ -203,6 +203,7 @@ Usage:
   recon0 list                       List all runs
   recon0 providers                  List registered providers
   recon0 update [--check]           Self-update to latest release
+  recon0 uninstall [--purge]        Remove recon0 from system
   recon0 version                    Show version
 ```
 
@@ -227,6 +228,18 @@ Usage:
 |------|-------|---------|-------------|
 | `--program NAME` | `-p` | domain | Program name |
 | `--remote HOST:PORT` | `-r` | `localhost:8484` | Remote server address |
+
+### `update` flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--check` | `false` | Only check for updates, don't install |
+
+### `uninstall` flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--purge` | `false` | Also remove all scan data (`runs/`) and config files |
 
 ### Examples
 
@@ -477,8 +490,13 @@ api:
 providers:
   subfinder:
     enabled: true
+    timeout: 30                 # Timeout in minutes
     # all: true                 # Use all passive sources
     # recursive: true           # Recursive enumeration
+
+  amass:
+    enabled: true
+    timeout: 30                 # Timeout in minutes (passive mode)
 
   dnsx:
     enabled: true
@@ -623,6 +641,7 @@ internal/
 ├── provider/
 │   ├── provider.go        Provider interface + registry
 │   ├── subfinder.go       Subdomain enumeration
+│   ├── amass.go           OWASP Amass passive enumeration
 │   ├── dnsx.go            DNS resolution + takeover checks
 │   ├── httpx.go           HTTP probing + tech detection
 │   ├── tlsx.go            TLS certificate extraction
@@ -745,7 +764,21 @@ Self-update downloads the correct binary for your OS/architecture from [GitHub R
 
 Supported platforms: `linux/amd64`, `linux/arm64`, `darwin/amd64`, `darwin/arm64`.
 
+> recon0 automatically checks for new releases in the background on every run. If a newer version is available, a one-line notice is printed to stderr — no delay, no blocking.
+
 > Container environments are detected automatically — use `docker build` to update instead.
+
+---
+
+## Uninstalling
+
+```bash
+# Remove the binary
+recon0 uninstall
+
+# Remove binary + all scan data and config
+recon0 uninstall --purge
+```
 
 ---
 
