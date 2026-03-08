@@ -19,6 +19,7 @@ type State struct {
 	JobID        string                 `json:"job_id"`
 	Program      string                 `json:"program"`
 	Domain       string                 `json:"domain"`
+	Domains      []string               `json:"domains,omitempty"`
 	StartedAt    string                 `json:"started_at"`
 	FinishedAt   *string                `json:"finished_at"`
 	Status       string                 `json:"status"`
@@ -77,13 +78,18 @@ type StateError struct {
 }
 
 // NewState creates a fresh pipeline state.
-func NewState(path, jobID, program, domain string) *State {
+func NewState(path, jobID, program string, domains []string) *State {
+	domain := ""
+	if len(domains) > 0 {
+		domain = domains[0]
+	}
 	return &State{
 		path:      path,
 		Version:   1,
 		JobID:     jobID,
 		Program:   program,
 		Domain:    domain,
+		Domains:   domains,
 		StartedAt: nowUTC(),
 		Status:    "running",
 		Stages:    make(map[string]*StageState),
@@ -267,7 +273,11 @@ func (s *State) Query() string {
 
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "recon0 — %s (%s) — %s\n", s.Program, s.Domain, s.Status)
+	if len(s.Domains) > 1 {
+		fmt.Fprintf(&b, "recon0 — %s (%d domains) — %s\n", s.Program, len(s.Domains), s.Status)
+	} else {
+		fmt.Fprintf(&b, "recon0 — %s (%s) — %s\n", s.Program, s.Domain, s.Status)
+	}
 	fmt.Fprintf(&b, "Started: %s\n", s.StartedAt)
 	if s.Resources != nil {
 		fmt.Fprintf(&b, "Resources: %d cores, %dGB RAM\n", s.Resources.Cores, s.Resources.RamGB)

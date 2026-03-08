@@ -89,9 +89,9 @@ func printUsage() {
 	fmt.Println("recon0 — bug bounty recon pipeline")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  recon0 run <domain> [--program NAME] [--config PATH] [--from-stage STAGE]")
+	fmt.Println("  recon0 run <domain|d1,d2,...> [-l file] [flags]           Execute the pipeline")
 	fmt.Println("  recon0 serve [--port 8484] [--config PATH]              Start API + job queue")
-	fmt.Println("  recon0 scan <domain> [--program NAME] [--remote HOST]   Queue a scan via API")
+	fmt.Println("  recon0 scan <domain|d1,d2,...> [-l file] [--remote HOST]  Queue a scan via API")
 	fmt.Println("  recon0 status [RUN_ID] [--remote HOST]                  Show scan status")
 	fmt.Println("  recon0 list                                             List all runs")
 	fmt.Println("  recon0 providers                                        List providers")
@@ -104,16 +104,42 @@ func printUsage() {
 
 func cmdRun() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: recon0 run <domain> [--program NAME] [--config PATH] [--from-stage STAGE]")
+		fmt.Fprintln(os.Stderr, "Usage: recon0 run <domain|d1,d2,...> [-l file] [--program NAME] [--config PATH] [--from-stage STAGE]")
 		os.Exit(1)
 	}
 
-	domain := os.Args[2]
-	program := domain
+	var domains []string
 	configPath := ""
 	fromStage := ""
+	program := ""
 
-	for i := 3; i < len(os.Args); i++ {
+	// Parse: first check if -l/--list is the second arg
+	startIdx := 3
+	if os.Args[2] == "-l" || os.Args[2] == "--list" {
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "Error: -l requires a file path")
+			os.Exit(1)
+		}
+		domains = readDomainFile(os.Args[3])
+		startIdx = 4
+	} else if strings.Contains(os.Args[2], ",") {
+		for _, d := range strings.Split(os.Args[2], ",") {
+			d = strings.TrimSpace(d)
+			if d != "" {
+				domains = append(domains, d)
+			}
+		}
+	} else {
+		domains = []string{os.Args[2]}
+	}
+
+	if len(domains) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: no domains provided")
+		os.Exit(1)
+	}
+	program = domains[0]
+
+	for i := startIdx; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--program", "-p":
 			if i+1 < len(os.Args) {
@@ -128,6 +154,11 @@ func cmdRun() {
 		case "--from-stage", "-f":
 			if i+1 < len(os.Args) {
 				fromStage = os.Args[i+1]
+				i++
+			}
+		case "-l", "--list":
+			if i+1 < len(os.Args) {
+				domains = readDomainFile(os.Args[i+1])
 				i++
 			}
 		}
@@ -180,7 +211,7 @@ func cmdRun() {
 			os.Exit(1)
 		}
 	} else {
-		logger, logDir, runDir, state = setupRun(cfg, program, domain)
+		logger, logDir, runDir, state = setupRun(cfg, program, domains)
 	}
 	defer logger.Close()
 	_ = logDir
@@ -205,7 +236,7 @@ func cmdRun() {
 
 	p := pipeline.New(cfg, res, logger, state, runDir)
 	p.FromStage = fromStage
-	if err := p.Run(ctx, domain, program); err != nil {
+	if err := p.Run(ctx, domains, program); err != nil {
 		logger.Errorf("Pipeline error: %v", err)
 		os.Exit(1)
 	}
@@ -320,7 +351,8 @@ func cmdServe() {
 		q.MarkRunning(job.ID, jobID)
 
 		stateFile := filepath.Join(runDir, "state.json")
-		state := pipeline.NewState(stateFile, jobID, job.Program, job.Domain)
+		jobDomains := []string{job.Domain}
+		state := pipeline.NewState(stateFile, jobID, job.Program, jobDomains)
 		srv.SetState(state)
 
 		// Job-specific log file
@@ -333,7 +365,7 @@ func cmdServe() {
 		jobLogger.Infof("Starting scan: %s (%s) — queue job %s", jobID, job.Domain, job.ID)
 
 		p := pipeline.New(cfg, res, jobLogger, state, runDir)
-		if err := p.Run(ctx, job.Domain, job.Program); err != nil {
+		if err := p.Run(ctx, jobDomains, job.Program); err != nil {
 			jobLogger.Errorf("Pipeline error: %v", err)
 			q.MarkFailed(job.ID, err.Error())
 		} else {
@@ -353,15 +385,40 @@ func cmdServe() {
 
 func cmdScan() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: recon0 scan <domain> [--program NAME] [--remote HOST:PORT]")
+		fmt.Fprintln(os.Stderr, "Usage: recon0 scan <domain|d1,d2,...> [-l file] [--program NAME] [--remote HOST:PORT]")
 		os.Exit(1)
 	}
 
-	domain := os.Args[2]
-	program := domain
+	var domains []string
+	program := ""
 	remote := "localhost:8484"
 
-	for i := 3; i < len(os.Args); i++ {
+	startIdx := 3
+	if os.Args[2] == "-l" || os.Args[2] == "--list" {
+		if len(os.Args) < 4 {
+			fmt.Fprintln(os.Stderr, "Error: -l requires a file path")
+			os.Exit(1)
+		}
+		domains = readDomainFile(os.Args[3])
+		startIdx = 4
+	} else if strings.Contains(os.Args[2], ",") {
+		for _, d := range strings.Split(os.Args[2], ",") {
+			d = strings.TrimSpace(d)
+			if d != "" {
+				domains = append(domains, d)
+			}
+		}
+	} else {
+		domains = []string{os.Args[2]}
+	}
+
+	if len(domains) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: no domains provided")
+		os.Exit(1)
+	}
+	program = domains[0]
+
+	for i := startIdx; i < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--program", "-p":
 			if i+1 < len(os.Args) {
@@ -373,11 +430,17 @@ func cmdScan() {
 				remote = os.Args[i+1]
 				i++
 			}
+		case "-l", "--list":
+			if i+1 < len(os.Args) {
+				domains = readDomainFile(os.Args[i+1])
+				i++
+			}
 		}
 	}
 
-	body, _ := json.Marshal(map[string]string{
-		"domain":  domain,
+	body, _ := json.Marshal(map[string]any{
+		"domain":  domains[0],
+		"domains": domains,
 		"program": program,
 	})
 
@@ -394,7 +457,7 @@ func cmdScan() {
 
 	fmt.Printf("Scan queued:\n")
 	fmt.Printf("  Queue ID:  %v\n", result["queue_id"])
-	fmt.Printf("  Domain:    %v\n", result["domain"])
+	fmt.Printf("  Domains:   %s\n", strings.Join(domains, ", "))
 	fmt.Printf("  Program:   %v\n", result["program"])
 	fmt.Printf("  Position:  %v\n", result["position"])
 }
@@ -907,7 +970,7 @@ func isContainer() bool {
 
 // ── helpers ──
 
-func setupRun(cfg *config.Config, program, domain string) (*log.Logger, string, string, *pipeline.State) {
+func setupRun(cfg *config.Config, program string, domains []string) (*log.Logger, string, string, *pipeline.State) {
 	os.MkdirAll(cfg.OutputDir, 0755)
 	runDir, isResume := pipeline.ResolveRunDir(cfg.OutputDir, program, cfg.Resume)
 	os.MkdirAll(runDir, 0755)
@@ -944,10 +1007,26 @@ func setupRun(cfg *config.Config, program, domain string) (*log.Logger, string, 
 		state.Status = "running"
 		logger.Info("Resuming pipeline: " + jobID)
 	} else {
-		state = pipeline.NewState(stateFile, jobID, program, domain)
+		state = pipeline.NewState(stateFile, jobID, program, domains)
 	}
 
 	return logger, logDir, runDir, state
+}
+
+func readDomainFile(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading domain file %s: %v\n", path, err)
+		os.Exit(1)
+	}
+	var domains []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" && !strings.HasPrefix(line, "#") {
+			domains = append(domains, line)
+		}
+	}
+	return domains
 }
 
 func lookPath(name string) (string, error) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -40,8 +41,8 @@ func New(cfg *config.Config, res *config.Resources, logger *log.Logger, state *S
 	}
 }
 
-// Run executes the full pipeline for the given domain.
-func (p *Pipeline) Run(ctx context.Context, domain, program string) error {
+// Run executes the full pipeline for the given domains.
+func (p *Pipeline) Run(ctx context.Context, domains []string, program string) error {
 	// Create directory structure
 	dirs := []string{
 		p.workDir + "/input",
@@ -57,12 +58,12 @@ func (p *Pipeline) Run(ctx context.Context, domain, program string) error {
 
 	// Write input domain file
 	domainFile := filepath.Join(p.workDir, "input", "domains.txt")
-	os.WriteFile(domainFile, []byte(domain+"\n"), 0644)
+	os.WriteFile(domainFile, []byte(strings.Join(domains, "\n")+"\n"), 0644)
 
 	// Record resources in state
 	p.state.SetResources(p.res.Cores, p.res.RamGB, p.res.ThreadsFull, p.res.ThreadsHeavy, p.res.ThreadsLight)
 
-	p.logger.Infof("Pipeline starting: %s (%s)", p.state.JobID, domain)
+	p.logger.Infof("Pipeline starting: %s (%d domains: %s)", p.state.JobID, len(domains), strings.Join(domains, ", "))
 	p.logger.Infof("Resources: %d cores, %dGB RAM", p.res.Cores, p.res.RamGB)
 
 	// --from-stage: reset state for stages from that point onwards

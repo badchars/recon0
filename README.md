@@ -196,9 +196,9 @@ $ recon0 providers
 recon0 — bug bounty recon pipeline
 
 Usage:
-  recon0 run <domain> [flags]       Execute the pipeline
+  recon0 run <domain|d1,d2,...> [-l file] [flags]   Execute the pipeline
   recon0 serve [flags]              Start API server + job queue worker
-  recon0 scan <domain> [flags]      Submit a scan to a remote server
+  recon0 scan <domain|d1,d2,...> [-l file] [flags] Submit a scan
   recon0 status [RUN_ID] [flags]    Show scan status
   recon0 list                       List all runs
   recon0 providers                  List registered providers
@@ -211,6 +211,7 @@ Usage:
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
+| `--list FILE` | `-l` | | Read domains from a file (one per line) |
 | `--program NAME` | `-p` | domain | Group scans under a program name |
 | `--config PATH` | `-c` | `recon0.yaml` | Path to config file |
 | `--from-stage STAGE` | `-f` | | Resume from a specific stage |
@@ -226,6 +227,7 @@ Usage:
 
 | Flag | Short | Default | Description |
 |------|-------|---------|-------------|
+| `--list FILE` | `-l` | | Read domains from a file (one per line) |
 | `--program NAME` | `-p` | domain | Program name |
 | `--remote HOST:PORT` | `-r` | `localhost:8484` | Remote server address |
 
@@ -247,6 +249,12 @@ Usage:
 # Basic scan
 recon0 run example.com
 
+# Multiple domains (comma-separated)
+recon0 run example.com,api.example.com,dev.example.com --program acme
+
+# Multiple domains (from file)
+recon0 run -l targets.txt --program acme
+
 # Organize under a bug bounty program
 recon0 run example.com --program hackerone-example
 
@@ -256,8 +264,8 @@ recon0 run example.com --program hackerone-example --from-stage analyze
 # Start the daemon
 recon0 serve --port 9090
 
-# Queue a remote scan
-recon0 scan example.com --remote 10.0.0.5:9090
+# Queue a remote scan (multi-domain works here too)
+recon0 scan example.com,api.example.com --remote 10.0.0.5:9090
 
 # Check status
 recon0 status --remote 10.0.0.5:9090
