@@ -20,14 +20,15 @@ func (h *Httpx) OutputType() string { return "hosts" }
 func (h *Httpx) Check() error       { return CheckBinary("httpx") }
 
 func (h *Httpx) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
-	// Hard timeout: kill httpx after 15 minutes regardless of progress.
-	// Partial results are preserved — the error path already handles this.
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
-	defer cancel()
-
 	jsonOut := opts.Output + ".json"
 	opts.ProgressFile = jsonOut // monitor JSON output for live progress
 	extra := opts.Config
+
+	// Hard timeout: kill httpx after N minutes regardless of progress.
+	// Partial results are preserved — the error path already handles this.
+	hardTimeoutMin := config.GetInt(extra, "hard_timeout", 15)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(hardTimeoutMin)*time.Minute)
+	defer cancel()
 	responsesDir := filepath.Join(opts.WorkDir, "responses")
 
 	// Build port list
