@@ -55,8 +55,9 @@ func (h *Httpx) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 		// Performance
 		"-t", strconv.Itoa(opts.Res.ThreadsLight),
 		"-rl", strconv.Itoa(opts.Res.RateFull),
-		"-timeout", strconv.Itoa(int(opts.Res.TimeoutHTTP.Seconds())),
-		"-retries", "2",
+		"-timeout", "5",
+		"-retries", "1",
+		"-no-fallback",
 		// Output
 		"-json", "-o", jsonOut,
 	}
