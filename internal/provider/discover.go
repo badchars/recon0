@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,14 +20,28 @@ import (
 	"github.com/badchars/recon0/internal/cdp"
 )
 
+// ParamDetail holds enriched parameter info extracted from HAR request data.
+type ParamDetail struct {
+	Name  string `json:"name"`
+	Value string `json:"value,omitempty"`
+	Type  string `json:"type,omitempty"` // numeric, uuid, email, url, boolean, string
+}
+
 // Endpoint represents a discovered API endpoint or URL.
 type Endpoint struct {
-	URL        string   `json:"url"`
-	Method     string   `json:"method"`
-	Source     string   `json:"source"` // "har", "js", "html", "sourcemap"
-	SourceFile string   `json:"source_file"`
-	Context    string   `json:"context,omitempty"`
-	Params     []string `json:"params,omitempty"`
+	URL            string        `json:"url"`
+	Method         string        `json:"method"`
+	Source         string        `json:"source"` // "har", "js", "html", "sourcemap"
+	SourceFile     string        `json:"source_file"`
+	Context        string        `json:"context,omitempty"`
+	Params         []string      `json:"params,omitempty"`
+	ParamDetails   []ParamDetail `json:"param_details,omitempty"`
+	BodyFields     []string      `json:"body_fields,omitempty"`
+	ResponseFields []string      `json:"response_fields,omitempty"`
+	StatusCode     int           `json:"status_code,omitempty"`
+	ContentType    string        `json:"content_type,omitempty"`
+	APIVersion     string        `json:"api_version,omitempty"`
+	NextVersion    string        `json:"next_version,omitempty"`
 }
 
 type Discover struct{}
@@ -565,31 +580,55 @@ func (d *Discover) extractFromHAR(harPath string, emit func(Endpoint)) {
 			continue
 		}
 
-		// Extract query params
+		// Extract query params + enriched param details
 		var params []string
+		var paramDetails []ParamDetail
 		if parsed, err := url.Parse(reqURL); err == nil {
-			for k := range parsed.Query() {
+			for k, vals := range parsed.Query() {
 				params = append(params, k)
+				v := ""
+				if len(vals) > 0 {
+					v = vals[0]
+				}
+				paramDetails = append(paramDetails, ParamDetail{
+					Name:  k,
+					Value: truncate(v, 100),
+					Type:  inferParamType(v),
+				})
 			}
 		}
 
+		// Detect API version pattern
+		apiVer, nextVer := detectAPIVersion(reqURL)
+
 		ep := Endpoint{
-			URL:        reqURL,
-			Method:     entry.Request.Method,
-			Source:     "har",
-			SourceFile: basename,
-			Params:     params,
+			URL:          reqURL,
+			Method:       entry.Request.Method,
+			Source:       "har",
+			SourceFile:   basename,
+			Params:       params,
+			ParamDetails: paramDetails,
+			StatusCode:   entry.Response.Status,
+			ContentType:  entry.Response.Content.MimeType,
+			APIVersion:   apiVer,
+			NextVersion:  nextVer,
 		}
 
-		// Extract POST body params
+		// Extract POST body context + field names
 		if entry.Request.PostData != nil && entry.Request.PostData.Text != "" {
 			ep.Context = truncate(entry.Request.PostData.Text, 200)
+			ep.BodyFields = extractPostBodyFields(entry.Request.PostData.Text, entry.Request.PostData.MimeType)
+		}
+
+		// Extract interesting response JSON field names
+		ct := entry.Response.Content.MimeType
+		if strings.Contains(ct, "json") && entry.Response.Content.Text != "" {
+			ep.ResponseFields = extractJSONFieldNames(entry.Response.Content.Text)
 		}
 
 		emit(ep)
 
 		// Also extract endpoints from HTML responses
-		ct := entry.Response.Content.MimeType
 		if strings.Contains(ct, "html") && entry.Response.Content.Text != "" {
 			extractHTMLEndpoints(entry.Response.Content.Text, reqURL, basename, emit)
 		}
@@ -690,6 +729,109 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[:max] + "..."
+}
+
+// ── HAR enrichment helpers ──
+
+var (
+	reNumericParam = regexp.MustCompile(`^-?[0-9]+$`)
+	reUUIDParam    = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	reEmailParam   = regexp.MustCompile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`)
+	reAPIVersion   = regexp.MustCompile(`/v([0-9]+)/`)
+)
+
+// inferParamType classifies a query parameter value.
+func inferParamType(value string) string {
+	if value == "" {
+		return "string"
+	}
+	if reNumericParam.MatchString(value) {
+		return "numeric"
+	}
+	if reUUIDParam.MatchString(value) {
+		return "uuid"
+	}
+	if reEmailParam.MatchString(value) {
+		return "email"
+	}
+	if strings.HasPrefix(value, "http://") || strings.HasPrefix(value, "https://") {
+		return "url"
+	}
+	lower := strings.ToLower(value)
+	if lower == "true" || lower == "false" {
+		return "boolean"
+	}
+	return "string"
+}
+
+// detectAPIVersion finds /v1/, /v2/ etc. in a URL and suggests the next version.
+func detectAPIVersion(rawURL string) (current, next string) {
+	m := reAPIVersion.FindStringSubmatch(rawURL)
+	if m == nil {
+		return "", ""
+	}
+	ver, _ := strconv.Atoi(m[1])
+	return fmt.Sprintf("v%d", ver), fmt.Sprintf("v%d", ver+1)
+}
+
+// interestingResponseFields lists JSON field names that are security-relevant in API responses.
+var interestingResponseFields = map[string]bool{
+	"id": true, "user_id": true, "userId": true,
+	"role": true, "roles": true, "is_admin": true, "isAdmin": true, "admin": true,
+	"token": true, "access_token": true, "accessToken": true, "refresh_token": true,
+	"secret": true, "api_key": true, "apiKey": true, "api_secret": true,
+	"password": true, "passwd": true, "hash": true,
+	"email": true, "phone": true, "ssn": true,
+	"private_key": true, "privateKey": true,
+	"session": true, "session_id": true, "sessionId": true,
+	"permissions": true, "scope": true, "scopes": true,
+}
+
+// extractJSONFieldNames returns interesting top-level field names from a JSON response body.
+func extractJSONFieldNames(jsonStr string) []string {
+	if len(jsonStr) < 2 {
+		return nil
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
+		// Try JSON array — inspect first element
+		var arr []json.RawMessage
+		if json.Unmarshal([]byte(jsonStr), &arr) != nil || len(arr) == 0 {
+			return nil
+		}
+		if json.Unmarshal(arr[0], &raw) != nil {
+			return nil
+		}
+	}
+	var result []string
+	for k := range raw {
+		if interestingResponseFields[k] {
+			result = append(result, k)
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// extractPostBodyFields returns top-level field names from a JSON POST body.
+func extractPostBodyFields(body, mimeType string) []string {
+	if body == "" || !strings.Contains(mimeType, "json") {
+		return nil
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal([]byte(body), &raw) != nil {
+		return nil
+	}
+	names := make([]string, 0, len(raw))
+	for k := range raw {
+		names = append(names, k)
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	return names
 }
 
 // ── Regex Patterns ──

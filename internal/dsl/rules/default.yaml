@@ -779,3 +779,80 @@ rules:
     pattern: "libsql://[^\\s\"']+\\.turso\\.io"
     source: [js, har]
     tags: [cloud, turso, database]
+
+  # ── Error Response Detection (HAR response bodies) ──
+
+  - id: verbose-error-4xx
+    name: "Verbose Error Response"
+    severity: medium
+    pattern: "(?i)(?:exception|error|stack.?trace|debug|traceback).*(?:line [0-9]+|at \\S+\\.\\S+|File \")"
+    source: [har]
+    tags: [response, error, verbose]
+
+  - id: framework-error-page
+    name: "Framework Error Page"
+    severity: medium
+    pattern: "(?i)(?:laravel|symfony|django|flask|express|rails|asp\\.net|spring|werkzeug|yii|nextjs).*(?:exception|error|debug|traceback)"
+    source: [har]
+    tags: [response, error, framework]
+
+  - id: debug-mode-enabled
+    name: "Debug Mode Enabled"
+    severity: high
+    pattern: "(?i)(?:debug[\"':\\s]*(?:true|enabled)|APP_DEBUG[\"':\\s]*true|FLASK_DEBUG|DEBUG_MODE|WP_DEBUG)"
+    source: [har, js]
+    tags: [response, debug]
+
+  - id: verbose-500-error
+    name: "Verbose 500 Error"
+    severity: medium
+    pattern: "(?i)(?:internal server error|500 error).*(?:stack|trace|exception|at \\S+\\.)"
+    source: [har]
+    tags: [response, error, 500]
+
+  - id: database-connection-error
+    name: "Database Connection Error"
+    severity: high
+    pattern: "(?i)(?:connection refused|SQLSTATE|could not connect to|Access denied for user|no pg_hba\\.conf entry|authentication failed for)"
+    source: [har]
+    tags: [response, error, database]
+
+  - id: path-disclosure
+    name: "Server Path Disclosure"
+    severity: medium
+    pattern: "(?:/(?:home|var|usr|opt|srv|app|www|data)/[a-zA-Z0-9._/-]{5,}|[A-Z]:\\\\(?:Users|inetpub|Program Files|wwwroot)\\\\[a-zA-Z0-9._\\\\-]{5,})"
+    source: [har]
+    tags: [response, info-disclosure, path]
+    false_positive: ["node_modules", "sourceMappingURL", "googleapis\\.com"]
+
+  # ── Sensitive Data in Response ──
+
+  - id: ssn-in-response
+    name: "SSN Pattern in Response"
+    severity: critical
+    pattern: "(?:\"ssn\"|\"social_security\"|\"socialSecurity\")[\"':\\s]+[\"']?[0-9]{3}-[0-9]{2}-[0-9]{4}"
+    source: [har]
+    tags: [response, pii, ssn]
+
+  - id: credit-card-in-response
+    name: "Credit Card Number in Response"
+    severity: critical
+    pattern: "(?:\"card_number\"|\"cardNumber\"|\"credit_card\"|\"creditCard\"|\"pan\")[\"':\\s]+[\"']?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}[- ]?[0-9]{4}"
+    source: [har]
+    tags: [response, pii, credit-card]
+
+  # ── Additional Header Issues ──
+
+  - id: missing-hsts
+    name: "Missing Strict-Transport-Security"
+    severity: low
+    pattern: "(?i)strict-transport-security"
+    source: [har_headers]
+    tags: [header, hsts]
+
+  - id: missing-xcontent-type
+    name: "Missing X-Content-Type-Options"
+    severity: low
+    pattern: "(?i)x-content-type-options"
+    source: [har_headers]
+    tags: [header, xcto]

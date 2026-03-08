@@ -186,6 +186,7 @@ func startProgressMonitor(ctx context.Context, opts *RunOpts, provName, stageNam
 		defer ticker.Stop()
 		start := time.Now()
 		lastCount := 0
+		staleTicks := 0
 
 		for {
 			select {
@@ -207,6 +208,14 @@ func startProgressMonitor(ctx context.Context, opts *RunOpts, provName, stageNam
 					logger.Provider(provName, fmt.Sprintf("progress — %s lines (%s)",
 						formatNumber(count), formatDur(time.Since(start))))
 					lastCount = count
+					staleTicks = 0
+				} else {
+					staleTicks++
+					// Log "still running" every 30s when no new output
+					if staleTicks%6 == 0 && count > 0 {
+						logger.Provider(provName, fmt.Sprintf("still running — %s lines (%s)",
+							formatNumber(count), formatDur(time.Since(start))))
+					}
 				}
 
 				// Update state with live progress

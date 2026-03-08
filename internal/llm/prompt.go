@@ -5,7 +5,7 @@ package llm
 // and verifies each investigation using its own tools.
 type Investigation struct {
 	ID              string              `json:"id"`
-	VulnType        string              `json:"vuln_type"`        // idor, ssrf, exposed_secret, access_control, tech_vuln, misconfiguration, info_disclosure, subdomain_takeover
+	VulnType        string              `json:"vuln_type"`        // idor, ssrf, exposed_secret, access_control, tech_vuln, misconfiguration, info_disclosure, subdomain_takeover, unauth_endpoint
 	Confidence      string              `json:"confidence"`       // high, medium, low
 	Severity        string              `json:"severity"`         // critical, high, medium, low, info
 	Title           string              `json:"title"`

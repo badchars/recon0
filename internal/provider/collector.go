@@ -113,6 +113,12 @@ func (c *Collector) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 	// Auth headers per host (from HAR)
 	authMap := extractAuthByHost(harDir)
 
+	// CORS headers from HAR responses
+	corsEntries := extractCORSFromHAR(harDir)
+
+	// Error responses from HAR
+	harErrors := extractHARErrorResponses(harDir)
+
 	// Build indexes for correlation
 	findingsByHost := indexFindingsByHost(findings)
 	findingsByFile := indexFindingsByFile(findings)
@@ -135,6 +141,10 @@ func (c *Collector) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 	investigations = append(investigations, generateMisconfigInvestigations(nextID, findings, fuzzFindings)...)
 	investigations = append(investigations, generateInfoDisclosureInvestigations(nextID, findings)...)
 	investigations = append(investigations, generateSubdomainTakeoverInvestigations(nextID, hosts)...)
+	investigations = append(investigations, generateCORSHARInvestigations(nextID, corsEntries, authMap)...)
+	investigations = append(investigations, generateErrorResponseInvestigations(nextID, harErrors, hostMap, authMap)...)
+	investigations = append(investigations, generateAPIVersionInvestigations(nextID, endpoints, hostMap)...)
+	investigations = append(investigations, generateUnauthAccessInvestigations(nextID, endpoints, hostMap)...)
 
 	// ── Write investigations.json ──
 
@@ -188,6 +198,8 @@ func (c *Collector) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 			"fuzz_findings":   len(fuzzFindings),
 			"investigations":  len(investigations),
 			"hosts_profiled":  len(hosts),
+			"cors_from_har":   len(corsEntries),
+			"har_errors":      len(harErrors),
 		},
 	}, nil
 }
@@ -297,6 +309,121 @@ func extractAuthByHost(harDir string) map[string]authInfo {
 	return result
 }
 
+// ── CORS Header Extraction from HAR ──
+
+type corsInfo struct {
+	URL              string
+	AllowOrigin      string
+	AllowCredentials bool
+	Host             string
+}
+
+func extractCORSFromHAR(harDir string) []corsInfo {
+	var results []corsInfo
+	seen := make(map[string]bool)
+
+	harFiles, _ := filepath.Glob(filepath.Join(harDir, "*.har"))
+	for _, harFile := range harFiles {
+		data, err := os.ReadFile(harFile)
+		if err != nil {
+			continue
+		}
+		var har cdp.HAR
+		if json.Unmarshal(data, &har) != nil {
+			continue
+		}
+
+		for _, entry := range har.Log.Entries {
+			host := extractHostFromURL(entry.Request.URL)
+			if host == "" || seen[host] {
+				continue
+			}
+
+			var acao, acac string
+			for _, h := range entry.Response.Headers {
+				switch strings.ToLower(h.Name) {
+				case "access-control-allow-origin":
+					acao = h.Value
+				case "access-control-allow-credentials":
+					acac = h.Value
+				}
+			}
+			if acao == "" {
+				continue
+			}
+
+			// Only flag interesting CORS configurations
+			isInteresting := acao == "*" || acao == "null" || strings.EqualFold(acac, "true")
+			if !isInteresting {
+				continue
+			}
+
+			seen[host] = true
+			results = append(results, corsInfo{
+				URL:              entry.Request.URL,
+				AllowOrigin:      acao,
+				AllowCredentials: strings.EqualFold(acac, "true"),
+				Host:             host,
+			})
+		}
+	}
+	return results
+}
+
+// ── HAR Error Response Extraction ──
+
+type harErrorEntry struct {
+	URL         string
+	Method      string
+	Status      int
+	BodySnippet string
+	Host        string
+}
+
+func extractHARErrorResponses(harDir string) []harErrorEntry {
+	var results []harErrorEntry
+	seen := make(map[string]bool)
+
+	harFiles, _ := filepath.Glob(filepath.Join(harDir, "*.har"))
+	for _, harFile := range harFiles {
+		data, err := os.ReadFile(harFile)
+		if err != nil {
+			continue
+		}
+		var har cdp.HAR
+		if json.Unmarshal(data, &har) != nil {
+			continue
+		}
+
+		for _, entry := range har.Log.Entries {
+			status := entry.Response.Status
+			if status < 400 || status == 404 {
+				continue
+			}
+
+			key := entry.Request.Method + " " + entry.Request.URL
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			bodySnippet := ""
+			if entry.Response.Content.Text != "" {
+				bodySnippet = truncateStr(entry.Response.Content.Text, 300)
+			}
+
+			results = append(results, harErrorEntry{
+				URL:         entry.Request.URL,
+				Method:      entry.Request.Method,
+				Status:      status,
+				BodySnippet: bodySnippet,
+				Host:        extractHostFromURL(entry.Request.URL),
+			})
+		}
+	}
+	return results
+}
+
 // ── Correlation Indexes ──
 
 func indexFindingsByHost(findings []llm.FindingSummary) map[string][]llm.FindingSummary {
@@ -373,10 +500,51 @@ func generateIDORInvestigations(nextID func() string, endpoints []Endpoint, host
 		}
 	}
 
+	// Also detect IDOR via enriched query param types
+	idParamKeywords := []string{"id", "user", "account", "order", "profile", "member"}
+	for _, ep := range endpoints {
+		if len(ep.ParamDetails) == 0 {
+			continue
+		}
+		parsed, err := url.Parse(ep.URL)
+		if err != nil || parsed.Host == "" {
+			continue
+		}
+		for _, pd := range ep.ParamDetails {
+			if pd.Type != "numeric" && pd.Type != "uuid" {
+				continue
+			}
+			if ssrfParamNames[strings.ToLower(pd.Name)] {
+				continue
+			}
+			nameLower := strings.ToLower(pd.Name)
+			isIDParam := false
+			for _, kw := range idParamKeywords {
+				if strings.Contains(nameLower, kw) {
+					isIDParam = true
+					break
+				}
+			}
+			if !isIDParam {
+				continue
+			}
+			key := ep.Method + " " + parsed.Scheme + "://" + parsed.Host + parsed.Path + "?" + pd.Name
+			if _, ok := groups[key]; ok {
+				continue
+			}
+			groups[key] = &patternGroup{
+				Pattern:  parsed.Path + "?" + pd.Name + "={" + pd.Type + "}",
+				Method:   ep.Method,
+				Host:     parsed.Hostname(),
+				Examples: []string{ep.URL},
+			}
+		}
+	}
+
 	var investigations []llm.Investigation
 	for _, g := range groups {
-		if len(g.Examples) < 2 {
-			continue // need at least 2 examples to suggest IDOR
+		if len(g.Examples) < 1 {
+			continue
 		}
 
 		auth := authMap[g.Host]
@@ -389,18 +557,18 @@ func generateIDORInvestigations(nextID func() string, endpoints []Endpoint, host
 		var verifySteps []string
 		if strings.Contains(g.Pattern, "{N}") {
 			verifySteps = []string{
-				fmt.Sprintf("%s %s — ID'yi 0 veya 1 ile değiştir, veri dönüyor mu?", g.Method, g.Examples[0]),
-				fmt.Sprintf("%s %s — ID'yi bir artır, başka kullanıcının verisi dönüyor mu?", g.Method, g.Examples[0]),
+				fmt.Sprintf("%s %s — Replace ID with 0 or 1, does it return data?", g.Method, g.Examples[0]),
+				fmt.Sprintf("%s %s — Increment the ID, does it return another user's data?", g.Method, g.Examples[0]),
 			}
 			if auth.HasAuth {
-				verifySteps = append(verifySteps, fmt.Sprintf("%s %s — Authorization header olmadan gönder, unauth erişim var mı?", g.Method, g.Examples[0]))
+				verifySteps = append(verifySteps, fmt.Sprintf("%s %s — Send without Authorization header, is unauthenticated access possible?", g.Method, g.Examples[0]))
 			}
 		} else {
 			verifySteps = []string{
-				fmt.Sprintf("%s %s — ID'yi değiştir, farklı veri dönüyor mu?", g.Method, g.Examples[0]),
+				fmt.Sprintf("%s %s — Replace the ID, does it return different data?", g.Method, g.Examples[0]),
 			}
 			if auth.HasAuth {
-				verifySteps = append(verifySteps, fmt.Sprintf("%s — Authorization olmadan erişim dene", g.Examples[0]))
+				verifySteps = append(verifySteps, fmt.Sprintf("%s — Try accessing without Authorization header", g.Examples[0]))
 			}
 		}
 
@@ -410,12 +578,12 @@ func generateIDORInvestigations(nextID func() string, endpoints []Endpoint, host
 			Confidence:  confidence,
 			Severity:    "high",
 			Title:       fmt.Sprintf("IDOR Candidate: %s %s", g.Method, g.Pattern),
-			Description: fmt.Sprintf("Endpoint parameterized ID kullanıyor, %d farklı değer gözlemlendi. Yetkilendirme kontrolü doğrulanmalı.", len(g.Examples)),
+			Description: fmt.Sprintf("Endpoint uses parameterized IDs, %d distinct values observed. Authorization controls should be verified.", len(g.Examples)),
 			FoundAt:     llm.InvestigationSource{Source: "endpoints.json", URL: g.Examples[0], Host: g.Host, Method: g.Method},
 			Evidence:    g.Examples,
 			Context:     ctx,
 			VerifySteps: verifySteps,
-			Question:    "Bu endpoint ID tabanlı erişim sağlıyor. Farklı ID'lerle aynı yetki seviyesinde veri dönüyor mu? Authorization olmadan erişim mümkün mü?",
+			Question:    "This endpoint provides ID-based access. Does it return data for different IDs at the same privilege level? Is unauthenticated access possible?",
 		})
 	}
 
@@ -433,7 +601,7 @@ func generateSSRFInvestigations(nextID func() string, endpoints []Endpoint, host
 			continue
 		}
 
-		// Check query parameters
+		// Check query parameters by name
 		for _, param := range ep.Params {
 			paramLower := strings.ToLower(param)
 			if !ssrfParamNames[paramLower] {
@@ -455,17 +623,51 @@ func generateSSRFInvestigations(nextID func() string, endpoints []Endpoint, host
 				Confidence:  "medium",
 				Severity:    "high",
 				Title:       fmt.Sprintf("SSRF Candidate: ?%s= parameter on %s", param, host),
-				Description: fmt.Sprintf("Endpoint'te '%s' parametresi URL/path kabul ediyor olabilir. Server-side request forgery riski.", param),
+				Description: fmt.Sprintf("Parameter '%s' may accept URL/path values. Potential server-side request forgery risk.", param),
 				FoundAt:     llm.InvestigationSource{Source: "endpoints.json", URL: ep.URL, Host: host, Method: ep.Method},
 				Evidence:    []string{ep.URL},
 				Context:     ctx,
 				VerifySteps: []string{
-					fmt.Sprintf("?%s=http://127.0.0.1 — localhost'a istek gidiyor mu?", param),
-					fmt.Sprintf("?%s=http://169.254.169.254/latest/meta-data/ — AWS metadata erişimi var mı?", param),
-					fmt.Sprintf("?%s=http://[burp-collaborator] — out-of-band callback dönüyor mu?", param),
-					fmt.Sprintf("?%s=file:///etc/passwd — local file read mümkün mü?", param),
+					fmt.Sprintf("?%s=http://127.0.0.1 — Does it make a request to localhost?", param),
+					fmt.Sprintf("?%s=http://169.254.169.254/latest/meta-data/ — Is AWS metadata accessible?", param),
+					fmt.Sprintf("?%s=http://[burp-collaborator] — Does it trigger an out-of-band callback?", param),
+					fmt.Sprintf("?%s=file:///etc/passwd — Is local file read possible?", param),
 				},
-				Question: fmt.Sprintf("'%s' parametresi URL/path kabul ediyor mu? Internal servislere veya cloud metadata'ya erişim sağlanabiliyor mu?", param),
+				Question: fmt.Sprintf("Does parameter '%s' accept URL/path values? Can it access internal services or cloud metadata?", param),
+			})
+		}
+
+		// Check enriched param types — actual URL value observed
+		for _, pd := range ep.ParamDetails {
+			if pd.Type != "url" {
+				continue
+			}
+			paramLower := strings.ToLower(pd.Name)
+			key := parsed.Hostname() + "|" + paramLower
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+
+			host := parsed.Hostname()
+			ctx := buildHostContext(host, hostMap, authInfo{})
+
+			investigations = append(investigations, llm.Investigation{
+				ID:          nextID(),
+				VulnType:    "ssrf",
+				Confidence:  "high",
+				Severity:    "high",
+				Title:       fmt.Sprintf("SSRF Candidate: ?%s= (URL value observed) on %s", pd.Name, host),
+				Description: fmt.Sprintf("Parameter '%s' contains an actual URL value: %s. High SSRF risk.", pd.Name, truncateStr(pd.Value, 80)),
+				FoundAt:     llm.InvestigationSource{Source: "endpoints.json", URL: ep.URL, Host: host, Method: ep.Method},
+				Evidence:    []string{ep.URL, fmt.Sprintf("Observed value: %s", pd.Value)},
+				Context:     ctx,
+				VerifySteps: []string{
+					fmt.Sprintf("?%s=http://127.0.0.1 — Does it make a request to localhost?", pd.Name),
+					fmt.Sprintf("?%s=http://169.254.169.254/latest/meta-data/ — Is AWS metadata accessible?", pd.Name),
+					fmt.Sprintf("?%s=http://[burp-collaborator] — Does it trigger an out-of-band callback?", pd.Name),
+				},
+				Question: fmt.Sprintf("Parameter '%s' accepts URLs (observed value: %s). Can it access internal services or cloud metadata?", pd.Name, truncateStr(pd.Value, 60)),
 			})
 		}
 	}
@@ -505,12 +707,12 @@ func generateSecretInvestigations(nextID func() string, findings []llm.FindingSu
 			Confidence:  "high",
 			Severity:    f.Severity,
 			Title:       fmt.Sprintf("%s: %s", f.RuleName, truncateStr(f.Value, 40)),
-			Description: fmt.Sprintf("%s bulundu. Kaynak: %s", f.RuleName, f.Source),
+			Description: fmt.Sprintf("%s found. Source: %s", f.RuleName, f.Source),
 			FoundAt:     llm.InvestigationSource{Source: f.Source, File: f.File, URL: f.URL, Host: host, Line: 0},
 			Evidence:    evidence,
 			Context:     ctx,
 			VerifySteps: verifySteps,
-			Question:    fmt.Sprintf("Bu %s aktif ve kullanılabilir mi? Aynı kaynakta başka credential var mı?", f.RuleName),
+			Question:    fmt.Sprintf("Is this %s active and usable? Are there other credentials in the same source?", f.RuleName),
 		})
 	}
 	return investigations
@@ -551,16 +753,16 @@ func generateAccessControlInvestigations(nextID func() string, fuzzFindings []sm
 			Confidence:  confidence,
 			Severity:    ff.Severity,
 			Title:       fmt.Sprintf("Access Control: %s", ff.Name),
-			Description: fmt.Sprintf("Admin/debug endpoint erişilebilir: %s. SmartFuzz tarafından tespit edildi.", ff.MatchedAt),
+			Description: fmt.Sprintf("Admin/debug endpoint accessible: %s. Detected by SmartFuzz.", ff.MatchedAt),
 			FoundAt:     llm.InvestigationSource{Source: "fuzz-findings.json", URL: ff.MatchedAt, Host: host},
 			Evidence:    []string{ff.Evidence},
 			Context:     ctx,
 			VerifySteps: []string{
-				fmt.Sprintf("GET %s — Authorization header olmadan erişim var mı?", ff.MatchedAt),
-				"POST request ile veri değiştirme/oluşturma dene",
-				"Farklı role'de kullanıcı ile erişim dene",
+				fmt.Sprintf("GET %s — Is it accessible without Authorization header?", ff.MatchedAt),
+				"Try modifying/creating data with a POST request",
+				"Try accessing with a different user role",
 			},
-			Question: "Bu admin/debug endpoint herkese açık mı? Yetkilendirme olmadan hassas veri veya fonksiyonlara erişim mümkün mü?",
+			Question: "Is this admin/debug endpoint publicly accessible? Can sensitive data or functions be accessed without authorization?",
 		})
 	}
 	return investigations
@@ -617,7 +819,7 @@ func generateTechVulnInvestigations(nextID func() string, fuzzFindings []smartFu
 			Evidence:    []string{ff.Evidence},
 			Context:     ctx,
 			VerifySteps: verifySteps,
-			Question:    fmt.Sprintf("%s gerçekten erişilebilir mi? Hassas veri sızıyor mu? Exploitable mi?", ff.Name),
+			Question:    fmt.Sprintf("Is %s actually accessible? Does it leak sensitive data? Is it exploitable?", ff.Name),
 		})
 	}
 	return investigations
@@ -645,11 +847,11 @@ func generateMisconfigInvestigations(nextID func() string, findings []llm.Findin
 			Evidence:    []string{ff.Evidence},
 			Context:     llm.InvestigationContext{},
 			VerifySteps: []string{
-				"Evil origin ile cookie/token okunabiliyor mu?",
-				"State-changing endpoint'lerde (POST/PUT/DELETE) de CORS reflection var mı?",
-				"Credentials ile birlikte kullanılabilir mi?",
+				"Can cookies/tokens be read from an evil origin?",
+				"Is CORS reflection present on state-changing endpoints (POST/PUT/DELETE)?",
+				"Can it be used with credentials?",
 			},
-			Question: "CORS misconfiguration exploitable mi? Sensitive data veya session token çalınabilir mi?",
+			Question: "Is this CORS misconfiguration exploitable? Can sensitive data or session tokens be stolen?",
 		})
 	}
 
@@ -674,11 +876,11 @@ func generateMisconfigInvestigations(nextID func() string, findings []llm.Findin
 			Evidence:    []string{f.Value},
 			Context:     llm.InvestigationContext{},
 			VerifySteps: []string{
-				fmt.Sprintf("Header doğrula: curl -I %s", f.URL),
-				"Tüm endpoint'lerde aynı durum mu?",
-				"Exploitable impact var mı?",
+				fmt.Sprintf("Verify header: curl -I %s", f.URL),
+				"Is the same issue present across all endpoints?",
+				"Is there an exploitable impact?",
 			},
-			Question: fmt.Sprintf("%s exploit edilebilir mi? Gerçek bir güvenlik etkisi var mı?", f.RuleName),
+			Question: fmt.Sprintf("Is %s exploitable? Does it have a real security impact?", f.RuleName),
 		})
 	}
 	return investigations
@@ -695,26 +897,26 @@ func generateInfoDisclosureInvestigations(nextID func() string, findings []llm.F
 		"sql-error": {
 			vulnHint: "SQL Injection",
 			verifySteps: []string{
-				"URL'deki parametreye ' (tek tırnak) ekle — SQL error değişiyor mu?",
-				"' OR 1=1-- dene — farklı sonuç dönüyor mu?",
-				"' UNION SELECT NULL-- dene — column sayısını belirle",
-				"sqlmap ile otomatik test yap",
+				"Append ' (single quote) to URL parameter — does the SQL error change?",
+				"Try ' OR 1=1-- — does it return different results?",
+				"Try ' UNION SELECT NULL-- — determine column count",
+				"Run automated testing with sqlmap",
 			},
 		},
 		"error-stack-trace": {
 			vulnHint: "Information Disclosure via Stack Trace",
 			verifySteps: []string{
-				"Stack trace'te framework version, internal path veya credential var mı?",
-				"Farklı input'larla daha fazla trace tetiklenebilir mi?",
-				"Error handling düzgün yapılmamış — diğer endpoint'lerde de test et",
+				"Does the stack trace reveal framework version, internal paths, or credentials?",
+				"Can more traces be triggered with different inputs?",
+				"Error handling is improper — test other endpoints as well",
 			},
 		},
 		"internal-ip": {
 			vulnHint: "Internal Network Mapping",
 			verifySteps: []string{
-				"Internal IP başka response'larda da geçiyor mu?",
-				"Bu IP'ye direkt erişim mümkün mü (SSRF üzerinden)?",
-				"Network topolojisi çıkarılabilir mi?",
+				"Does the internal IP appear in other responses?",
+				"Is direct access to this IP possible (via SSRF)?",
+				"Can the network topology be mapped?",
 			},
 		},
 	}
@@ -737,12 +939,12 @@ func generateInfoDisclosureInvestigations(nextID func() string, findings []llm.F
 			Confidence:  confidence,
 			Severity:    f.Severity,
 			Title:       fmt.Sprintf("%s — Potential %s", f.RuleName, rule.vulnHint),
-			Description: fmt.Sprintf("%s tespit edildi. Bu durum %s zafiyetine işaret edebilir.", f.RuleName, rule.vulnHint),
+			Description: fmt.Sprintf("%s detected. This may indicate a %s vulnerability.", f.RuleName, rule.vulnHint),
 			FoundAt:     llm.InvestigationSource{Source: f.Source, URL: f.URL, Host: host, File: f.File},
 			Evidence:    []string{truncateStr(f.Value, 200)},
 			Context:     llm.InvestigationContext{},
 			VerifySteps: rule.verifySteps,
-			Question:    fmt.Sprintf("%s gerçek bir zafiyet göstergesi mi? Aktif olarak exploit edilebilir mi?", rule.vulnHint),
+			Question:    fmt.Sprintf("Is %s a real vulnerability indicator? Can it be actively exploited?", rule.vulnHint),
 		})
 	}
 	return investigations
@@ -778,22 +980,288 @@ func generateSubdomainTakeoverInvestigations(nextID func() string, hosts []llm.H
 					Confidence:  confidence,
 					Severity:    "high",
 					Title:       fmt.Sprintf("Subdomain Takeover: %s → %s (%s)", h.Host, cname, service),
-					Description: fmt.Sprintf("CNAME %s servisi (%s) işaret ediyor. Status: %d. Servis claim edilebilir mi?", service, cname, h.StatusCode),
+					Description: fmt.Sprintf("CNAME points to %s service (%s). Status: %d. Can the service be claimed?", service, cname, h.StatusCode),
 					FoundAt:     llm.InvestigationSource{Source: "httpx", Host: h.Host},
 					Evidence:    []string{fmt.Sprintf("CNAME: %s", cname), fmt.Sprintf("Status: %d", h.StatusCode)},
 					Context:     llm.InvestigationContext{},
 					VerifySteps: []string{
-						fmt.Sprintf("dig %s CNAME — CNAME hala aktif mi?", h.Host),
-						fmt.Sprintf("curl -I https://%s — response ne dönüyor?", h.Host),
-						fmt.Sprintf("%s'de '%s' hesabını claim etmeyi dene", service, h.Host),
+						fmt.Sprintf("dig %s CNAME — Is the CNAME still active?", h.Host),
+						fmt.Sprintf("curl -I https://%s — What does the response return?", h.Host),
+						fmt.Sprintf("Try claiming '%s' on %s", h.Host, service),
 					},
-					Question: fmt.Sprintf("%s üzerindeki CNAME dangling mi? %s servisi üzerinden subdomain takeover mümkün mü?", h.Host, service),
+					Question: fmt.Sprintf("Is the CNAME on %s dangling? Is subdomain takeover possible via %s?", h.Host, service),
 				})
 				break // one match per CNAME is enough
 			}
 		}
 	}
 	return investigations
+}
+
+// generateCORSHARInvestigations creates investigations from CORS headers observed in HAR.
+func generateCORSHARInvestigations(nextID func() string, corsEntries []corsInfo, authMap map[string]authInfo) []llm.Investigation {
+	var investigations []llm.Investigation
+	for _, c := range corsEntries {
+		auth := authMap[c.Host]
+
+		severity := "medium"
+		desc := fmt.Sprintf("CORS allows origin: %s", c.AllowOrigin)
+		if c.AllowCredentials && (c.AllowOrigin == "*" || c.AllowOrigin == "null") {
+			severity = "high"
+			desc = "CORS allows credentials with wildcard/null origin — cookie theft possible"
+		}
+
+		investigations = append(investigations, llm.Investigation{
+			ID:          nextID(),
+			VulnType:    "misconfiguration",
+			Confidence:  "high",
+			Severity:    severity,
+			Title:       fmt.Sprintf("CORS Misconfiguration (HAR): %s", c.Host),
+			Description: desc,
+			FoundAt:     llm.InvestigationSource{Source: "har", URL: c.URL, Host: c.Host},
+			Evidence: []string{
+				fmt.Sprintf("Access-Control-Allow-Origin: %s", c.AllowOrigin),
+				fmt.Sprintf("Access-Control-Allow-Credentials: %v", c.AllowCredentials),
+			},
+			Context: llm.InvestigationContext{AuthSeen: auth.HasAuth, AuthType: auth.AuthType},
+			VerifySteps: []string{
+				fmt.Sprintf("curl -H 'Origin: https://evil.test' -I %s — Is there origin reflection?", c.URL),
+				"Can cookies/tokens be read from an evil origin?",
+				"Is CORS reflection present on state-changing endpoints (POST/PUT/DELETE)?",
+			},
+			Question: "Is this CORS misconfiguration exploitable? Can sensitive data or session tokens be stolen?",
+		})
+	}
+	return investigations
+}
+
+// generateErrorResponseInvestigations creates investigations from 4xx/5xx HAR responses.
+func generateErrorResponseInvestigations(nextID func() string, errors []harErrorEntry, hostMap map[string]*llm.HostInfo, authMap map[string]authInfo) []llm.Investigation {
+	var investigations []llm.Investigation
+
+	for _, e := range errors {
+		ctx := buildHostContext(e.Host, hostMap, authMap[e.Host])
+
+		switch {
+		case e.Status == 403:
+			investigations = append(investigations, llm.Investigation{
+				ID:          nextID(),
+				VulnType:    "access_control",
+				Confidence:  "medium",
+				Severity:    "medium",
+				Title:       fmt.Sprintf("403 Forbidden — Auth Bypass Candidate: %s %s", e.Method, e.URL),
+				Description: "Endpoint returns 403. Can it be bypassed with different auth methods or header manipulation?",
+				FoundAt:     llm.InvestigationSource{Source: "har", URL: e.URL, Host: e.Host, Method: e.Method},
+				Evidence:    []string{fmt.Sprintf("%d Forbidden", e.Status), e.BodySnippet},
+				Context:     ctx,
+				VerifySteps: []string{
+					fmt.Sprintf("%s %s — Try without Authorization header", e.Method, e.URL),
+					fmt.Sprintf("%s %s — Switch HTTP method (GET<->POST)", e.Method, e.URL),
+					fmt.Sprintf("%s %s — Add X-Forwarded-For: 127.0.0.1 header", e.Method, e.URL),
+					fmt.Sprintf("%s %s — Try path traversal: /..;/path", e.Method, e.URL),
+				},
+				Question: "Can this 403 endpoint be bypassed? Is access possible via different HTTP methods, headers, or path manipulation?",
+			})
+
+		case e.Status == 401:
+			investigations = append(investigations, llm.Investigation{
+				ID:          nextID(),
+				VulnType:    "access_control",
+				Confidence:  "low",
+				Severity:    "low",
+				Title:       fmt.Sprintf("401 Unauthorized — Auth Required: %s %s", e.Method, e.URL),
+				Description: "Endpoint requires authentication. Access can be attempted with another user's token.",
+				FoundAt:     llm.InvestigationSource{Source: "har", URL: e.URL, Host: e.Host, Method: e.Method},
+				Evidence:    []string{fmt.Sprintf("%d Unauthorized", e.Status)},
+				Context:     ctx,
+				VerifySteps: []string{
+					"Try accessing with a different session/token",
+					"Try default credentials",
+				},
+				Question: "Is unauthorized access to this endpoint possible?",
+			})
+
+		case e.Status >= 500:
+			confidence := "medium"
+			if e.BodySnippet != "" {
+				confidence = "high"
+			}
+			investigations = append(investigations, llm.Investigation{
+				ID:          nextID(),
+				VulnType:    "info_disclosure",
+				Confidence:  confidence,
+				Severity:    "medium",
+				Title:       fmt.Sprintf("Server Error %d — Potential Injection Point: %s %s", e.Status, e.Method, e.URL),
+				Description: fmt.Sprintf("Endpoint returns %d. Possible input handling error, candidate for injection testing.", e.Status),
+				FoundAt:     llm.InvestigationSource{Source: "har", URL: e.URL, Host: e.Host, Method: e.Method},
+				Evidence:    []string{fmt.Sprintf("%d Server Error", e.Status), e.BodySnippet},
+				Context:     ctx,
+				VerifySteps: []string{
+					fmt.Sprintf("%s %s — Append ' to parameters, does a SQL error appear?", e.Method, e.URL),
+					fmt.Sprintf("%s %s — Append {{7*7}} to parameters, is template injection present?", e.Method, e.URL),
+					fmt.Sprintf("%s %s — Send large input, is there a buffer overflow?", e.Method, e.URL),
+				},
+				Question: "Is this 500 error caused by input manipulation? Is there an injection vulnerability?",
+			})
+		}
+	}
+	return investigations
+}
+
+// generateAPIVersionInvestigations checks for API version escalation opportunities.
+func generateAPIVersionInvestigations(nextID func() string, endpoints []Endpoint, hostMap map[string]*llm.HostInfo) []llm.Investigation {
+	var investigations []llm.Investigation
+	seen := make(map[string]bool)
+
+	for _, ep := range endpoints {
+		if ep.APIVersion == "" || ep.NextVersion == "" {
+			continue
+		}
+		parsed, err := url.Parse(ep.URL)
+		if err != nil || parsed.Host == "" {
+			continue
+		}
+		key := parsed.Hostname() + "|" + ep.APIVersion
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		host := parsed.Hostname()
+		nextURL := strings.Replace(ep.URL, "/"+ep.APIVersion+"/", "/"+ep.NextVersion+"/", 1)
+		ctx := buildHostContext(host, hostMap, authInfo{})
+
+		investigations = append(investigations, llm.Investigation{
+			ID:          nextID(),
+			VulnType:    "info_disclosure",
+			Confidence:  "low",
+			Severity:    "info",
+			Title:       fmt.Sprintf("API Version %s Found — Try %s on %s", ep.APIVersion, ep.NextVersion, host),
+			Description: fmt.Sprintf("API %s is in use. %s may exist and could have different authorization rules.", ep.APIVersion, ep.NextVersion),
+			FoundAt:     llm.InvestigationSource{Source: "endpoints.json", URL: ep.URL, Host: host, Method: ep.Method},
+			Evidence:    []string{ep.URL},
+			Context:     ctx,
+			VerifySteps: []string{
+				fmt.Sprintf("GET %s — Is the new version accessible?", nextURL),
+				fmt.Sprintf("Older version (%s) may bypass deprecated security controls", ep.APIVersion),
+			},
+			Question: fmt.Sprintf("Does version %s exist? Does it have different or weaker authorization rules?", ep.NextVersion),
+		})
+	}
+	return investigations
+}
+
+// generateUnauthAccessInvestigations creates an investigation for every non-static
+// endpoint discovered via unauthenticated JS/HAR crawling. The AI agent decides
+// what's testable and what vulnerabilities to look for based on the endpoint context.
+func generateUnauthAccessInvestigations(nextID func() string, endpoints []Endpoint, hostMap map[string]*llm.HostInfo) []llm.Investigation {
+	var investigations []llm.Investigation
+	seen := make(map[string]bool)
+
+	for _, ep := range endpoints {
+		parsed, err := url.Parse(ep.URL)
+		if err != nil || parsed.Host == "" {
+			continue
+		}
+
+		pathLower := strings.ToLower(parsed.Path)
+		if pathLower == "" || pathLower == "/" {
+			continue
+		}
+
+		// Skip static assets
+		if isStaticAsset(pathLower) {
+			continue
+		}
+
+		// Dedup by host + normalized path
+		host := parsed.Hostname()
+		key := host + "|" + normalizePath(parsed.Path)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		ctx := buildHostContext(host, hostMap, authInfo{})
+
+		// Build evidence from enriched endpoint data
+		var evidence []string
+		evidence = append(evidence, fmt.Sprintf("Source: %s", ep.Source))
+		if ep.SourceFile != "" {
+			evidence = append(evidence, fmt.Sprintf("File: %s", ep.SourceFile))
+		}
+		if len(ep.Params) > 0 {
+			evidence = append(evidence, fmt.Sprintf("Params: %s", strings.Join(ep.Params, ", ")))
+		}
+		if len(ep.ParamDetails) > 0 {
+			for _, pd := range ep.ParamDetails {
+				evidence = append(evidence, fmt.Sprintf("Param %s=%s (type: %s)", pd.Name, truncateStr(pd.Value, 50), pd.Type))
+			}
+		}
+		if len(ep.BodyFields) > 0 {
+			evidence = append(evidence, fmt.Sprintf("POST body fields: %s", strings.Join(ep.BodyFields, ", ")))
+		}
+		if len(ep.ResponseFields) > 0 {
+			evidence = append(evidence, fmt.Sprintf("Response fields: %s", strings.Join(ep.ResponseFields, ", ")))
+		}
+		if ep.StatusCode > 0 {
+			evidence = append(evidence, fmt.Sprintf("Status: %d", ep.StatusCode))
+		}
+		if ep.Context != "" {
+			evidence = append(evidence, fmt.Sprintf("Context: %s", truncateStr(ep.Context, 100)))
+		}
+
+		investigations = append(investigations, llm.Investigation{
+			ID:       nextID(),
+			VulnType: "unauth_endpoint",
+			Confidence: "low",
+			Severity:   "info",
+			Title:      fmt.Sprintf("Endpoint Discovered: %s %s", ep.Method, parsed.Path),
+			Description: fmt.Sprintf(
+				"This endpoint was discovered unauthenticated from %s source. "+
+					"Evaluate whether it is a valid endpoint, if it is accessible, and what security tests can be applied.",
+				ep.Source,
+			),
+			FoundAt: llm.InvestigationSource{
+				Source: ep.Source,
+				URL:    ep.URL,
+				Host:   host,
+				Method: ep.Method,
+				File:   ep.SourceFile,
+			},
+			Evidence: evidence,
+			Context:  ctx,
+			VerifySteps: []string{
+				fmt.Sprintf("curl -s -o /dev/null -w '%%{http_code}' %s — Is the endpoint accessible?", ep.URL),
+				"Inspect the response: does it return data, what type of data?",
+				"Does it require auth? Is unauthenticated access a broken access control issue?",
+				"If it has parameters: can IDOR, SSRF, or injection tests be applied?",
+			},
+			Question: "Is this endpoint valid and accessible? What security tests should be performed? Is unauthenticated access a vulnerability?",
+		})
+	}
+	return investigations
+}
+
+// isStaticAsset checks if a path looks like a static file.
+func isStaticAsset(pathLower string) bool {
+	staticExts := []string{
+		".js", ".css", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico",
+		".woff", ".woff2", ".ttf", ".eot", ".map", ".webp", ".avif",
+		".mp4", ".webm", ".pdf",
+	}
+	for _, ext := range staticExts {
+		if strings.HasSuffix(pathLower, ext) {
+			return true
+		}
+	}
+	staticPaths := []string{"/static/", "/assets/", "/public/", "/dist/", "/build/", "/_next/static/", "/cdn-cgi/"}
+	for _, p := range staticPaths {
+		if strings.Contains(pathLower, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // ── Helper Functions ──
@@ -837,39 +1305,39 @@ func buildSecretVerifySteps(f llm.FindingSummary) []string {
 	switch {
 	case strings.Contains(f.RuleID, "aws"):
 		return []string{
-			"AWS CLI ile key doğrula: aws sts get-caller-identity --access-key-id [KEY]",
-			"Aynı dosyada AWS secret key de var mı?",
-			"S3 bucket erişimi dene: aws s3 ls --profile test",
+			"Validate key with AWS CLI: aws sts get-caller-identity --access-key-id [KEY]",
+			"Is there an AWS secret key in the same file?",
+			"Try S3 bucket access: aws s3 ls --profile test",
 		}
 	case strings.Contains(f.RuleID, "github"):
 		return []string{
-			"Token scope kontrolü: curl -H 'Authorization: token [TOKEN]' https://api.github.com/user",
-			"Hangi repo'lara erişim var?",
-			"Token'ın org-level yetkileri var mı?",
+			"Check token scope: curl -H 'Authorization: token [TOKEN]' https://api.github.com/user",
+			"Which repos does it have access to?",
+			"Does the token have org-level permissions?",
 		}
 	case f.RuleID == "jwt-token":
 		return []string{
-			"JWT'yi jwt.io'da decode et — payload'da ne var?",
-			"Signature verification bypass dene (alg: none)",
-			"Token expired mı? Expire olmamış token ile erişim dene",
+			"Decode the JWT at jwt.io — what's in the payload?",
+			"Try signature verification bypass (alg: none)",
+			"Is the token expired? Try access with a non-expired token",
 		}
 	case f.RuleID == "private-key":
 		return []string{
-			"Key tipi ve boyutu kontrol et",
-			"Bu key hangi serviste kullanılıyor?",
-			"Key ile SSH veya TLS bağlantısı dene",
+			"Check key type and size",
+			"Which service uses this key?",
+			"Try SSH or TLS connection with the key",
 		}
 	case strings.Contains(f.RuleID, "stripe"):
 		return []string{
-			"Stripe API ile key doğrula: curl https://api.stripe.com/v1/charges -u [KEY]:",
-			"Live key mi yoksa test key mi?",
-			"Ödeme bilgilerine erişim var mı?",
+			"Validate key with Stripe API: curl https://api.stripe.com/v1/charges -u [KEY]:",
+			"Is it a live key or test key?",
+			"Is there access to payment data?",
 		}
 	default:
 		return []string{
-			"Key/token'ın aktif olup olmadığını doğrula",
-			"Aynı kaynakta başka credential var mı?",
-			"Token scope ve yetkileri kontrol et",
+			"Verify whether the key/token is active",
+			"Are there other credentials in the same source?",
+			"Check token scope and permissions",
 		}
 	}
 }
@@ -879,45 +1347,45 @@ func buildTechVulnVerifySteps(ff smartFuzzFinding) []string {
 	switch {
 	case strings.Contains(tid, "actuator-env"):
 		return []string{
-			"Response'ta plaintext password veya API key var mı?",
-			"/actuator/heapdump indirilebilir mi?",
-			"POST /actuator/env ile property set edilebilir mi? (RCE chain)",
+			"Does the response contain plaintext passwords or API keys?",
+			"Can /actuator/heapdump be downloaded?",
+			"Can properties be set via POST /actuator/env? (RCE chain)",
 		}
 	case strings.Contains(tid, "heapdump"):
 		return []string{
-			"Heapdump'ı indir ve credential ara: strings heapdump | grep -i password",
-			"JVisualVM veya Eclipse MAT ile analiz et",
-			"Database connection string, API key ara",
+			"Download heapdump and search for credentials: strings heapdump | grep -i password",
+			"Analyze with JVisualVM or Eclipse MAT",
+			"Search for database connection strings, API keys",
 		}
 	case strings.Contains(tid, "pprof"):
 		return []string{
-			"Heap dump'ta credential/secret ara",
-			"Goroutine dump'ta internal API path'leri ara",
-			"/debug/pprof/cmdline ile başlatma argümanlarını kontrol et",
+			"Search heap dump for credentials/secrets",
+			"Search goroutine dump for internal API paths",
+			"Check startup arguments via /debug/pprof/cmdline",
 		}
 	case strings.Contains(tid, "graphql"):
 		return []string{
-			"Introspection ile tüm type ve query'leri listele",
-			"Mutation'lar var mı? Yetkilendirme kontrol et",
-			"Sensitive field'lar (password, token, secret) ara",
+			"List all types and queries via introspection",
+			"Are there mutations? Check authorization",
+			"Search for sensitive fields (password, token, secret)",
 		}
 	case strings.Contains(tid, "git"):
 		return []string{
-			"git-dumper ile .git/ dizinini komple indir",
-			"Source code'da hardcoded credential ara",
-			"Commit history'de silinen secret'ları ara: git log -p | grep -i password",
+			"Download the entire .git/ directory with git-dumper",
+			"Search source code for hardcoded credentials",
+			"Search commit history for deleted secrets: git log -p | grep -i password",
 		}
 	case strings.Contains(tid, "env"):
 		return []string{
-			".env dosyasındaki credential'ları doğrula",
-			"Database connection string ile bağlantı dene",
-			"API key'lerin scope ve yetkilerini kontrol et",
+			"Validate credentials in the .env file",
+			"Try connecting with the database connection string",
+			"Check API key scopes and permissions",
 		}
 	default:
 		return []string{
-			fmt.Sprintf("Endpoint'e erişim doğrula: curl %s", ff.MatchedAt),
-			"Hassas veri sızıyor mu kontrol et",
-			"Exploit edilebilir mi değerlendir",
+			fmt.Sprintf("Verify endpoint access: curl %s", ff.MatchedAt),
+			"Check if sensitive data is leaking",
+			"Assess whether it is exploitable",
 		}
 	}
 }
