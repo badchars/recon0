@@ -57,7 +57,9 @@ const (
 type hostBaseline struct {
 	StatusCode   int
 	BodyLength   int
+	PathLength   int  // length of the calibration path (e.g. len("/rc0-abcdef123456"))
 	ReflectsPath bool // response body contained the random calibration string
+	BodyStable   bool // two different random paths returned same-ish body size
 	Sampled      bool
 }
 
@@ -336,55 +338,125 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 
 // ── Baseline Calibration (Custom 404 Detection) ──
 
-// calibrateHost sends a request to a random non-existent path and records
-// the response as a baseline. This detects custom 404 pages that return 200.
+// calibrateHost sends two requests with different-length random paths and records
+// the response as a baseline. Two requests let us detect path-reflecting 404 pages
+// where body size varies with path length (e.g. "swagger.json not found").
 func calibrateHost(ctx context.Context, client *http.Client, baseURL string) hostBaseline {
-	randStr := fmt.Sprintf("%x", time.Now().UnixNano())
-	if len(randStr) > 12 {
-		randStr = randStr[:12]
-	}
-	calibratePath := "/rc0-" + randStr
+	base := strings.TrimRight(baseURL, "/")
 
-	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(baseURL, "/")+calibratePath, nil)
-	if err != nil {
+	// Request 1: short random path (16 chars total with prefix)
+	rand1 := fmt.Sprintf("%x", time.Now().UnixNano())
+	if len(rand1) > 8 {
+		rand1 = rand1[:8]
+	}
+	path1 := "/rc0-" + rand1 // e.g. "/rc0-a3f8c2d1" — 13 chars
+
+	r1Status, r1Body, r1Len, err1 := sendCalibrationRequest(ctx, client, base+path1)
+	if err1 != nil {
 		return hostBaseline{}
+	}
+
+	// Request 2: longer random path (different length to detect path reflection)
+	rand2 := rand1 + "extrapadding"
+	path2 := "/rc0-" + rand2 // e.g. "/rc0-a3f8c2d1extrapadding" — 25 chars
+
+	r2Status, _, r2Len, err2 := sendCalibrationRequest(ctx, client, base+path2)
+	if err2 != nil {
+		// At least we have request 1
+		return hostBaseline{
+			StatusCode:   r1Status,
+			BodyLength:   r1Len,
+			PathLength:   len(path1),
+			ReflectsPath: strings.Contains(r1Body, rand1),
+			BodyStable:   false,
+			Sampled:      true,
+		}
+	}
+
+	reflects := strings.Contains(r1Body, rand1)
+
+	// Determine if body size is stable (same status, similar size)
+	// If both return same status, check body length relationship
+	stable := false
+	if r1Status == r2Status {
+		diff := r1Len - r2Len
+		if diff < 0 {
+			diff = -diff
+		}
+		pathLenDiff := len(path2) - len(path1)
+		if pathLenDiff < 0 {
+			pathLenDiff = -pathLenDiff
+		}
+
+		if diff <= 5 {
+			// Body size nearly identical — fixed template (no path reflection in body size)
+			stable = true
+		} else if reflects && diff >= pathLenDiff-5 && diff <= pathLenDiff+5 {
+			// Body size difference matches path length difference
+			// → server reflects path in body, size varies with path length
+			// This is ALSO stable — we can normalize by subtracting path length
+			stable = true
+		}
+	}
+
+	return hostBaseline{
+		StatusCode:   r1Status,
+		BodyLength:   r1Len,
+		PathLength:   len(path1),
+		ReflectsPath: reflects,
+		BodyStable:   stable,
+		Sampled:      true,
+	}
+}
+
+func sendCalibrationRequest(ctx context.Context, client *http.Client, url string) (int, string, int, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return 0, "", 0, err
 	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; recon0-probe/1.0)")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return hostBaseline{}
+		return 0, "", 0, err
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
 	if err != nil {
-		return hostBaseline{}
+		return 0, "", 0, err
 	}
 
-	return hostBaseline{
-		StatusCode:   resp.StatusCode,
-		BodyLength:   len(body),
-		ReflectsPath: strings.Contains(string(body), randStr),
-		Sampled:      true,
-	}
+	return resp.StatusCode, string(body), len(body), nil
 }
 
 // isLikelyCustom404 checks if a response matches the host's 404 baseline.
 // Returns true if the response looks like a custom 404 page.
-func isLikelyCustom404(bl hostBaseline, statusCode int, bodyLen int) bool {
-	if !bl.Sampled {
+// For path-reflecting servers, normalizes body size by accounting for
+// the path length difference between calibration and actual probe.
+func isLikelyCustom404(bl hostBaseline, statusCode int, bodyLen int, probePath string) bool {
+	if !bl.Sampled || !bl.BodyStable {
 		return false
 	}
 	if statusCode != bl.StatusCode {
 		return false
 	}
-	// Body length similarity: within ±10% or ±100 bytes (whichever is larger)
-	tolerance := bl.BodyLength / 10
+
+	expectedLen := bl.BodyLength
+	if bl.ReflectsPath {
+		// Server reflects path in body → normalize body size.
+		// Baseline was recorded with a path of bl.PathLength chars.
+		// The actual probe has len(probePath) chars.
+		// Body size difference should roughly equal path length difference.
+		expectedLen = bl.BodyLength + (len(probePath) - bl.PathLength)
+	}
+
+	// Tolerance: ±10% or ±100 bytes (whichever is larger)
+	tolerance := expectedLen / 10
 	if tolerance < 100 {
 		tolerance = 100
 	}
-	diff := bodyLen - bl.BodyLength
+	diff := bodyLen - expectedLen
 	if diff < 0 {
 		diff = -diff
 	}
@@ -619,7 +691,7 @@ func executeFuzzProbe(ctx context.Context, client *http.Client, target fuzzTarge
 	}
 
 	bodyStr := string(body)
-	baselineMatch := isLikelyCustom404(baseline, resp.StatusCode, len(body))
+	baselineMatch := isLikelyCustom404(baseline, resp.StatusCode, len(body), probe.Path)
 
 	// Special case: heapdump/pprof heap — check for large binary response
 	if probe.RuleID == "spring-actuator-heapdump" || probe.RuleID == "go-pprof-heap" {
@@ -751,7 +823,7 @@ func executeDiscoveryProbe(ctx context.Context, client *http.Client, dt discover
 	}
 
 	// Custom 404 baseline check — critical for discovery probes which have no ExpectBody
-	if isLikelyCustom404(baseline, resp.StatusCode, len(body)) {
+	if isLikelyCustom404(baseline, resp.StatusCode, len(body), dt.Path) {
 		return nil
 	}
 
