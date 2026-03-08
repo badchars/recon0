@@ -24,9 +24,14 @@ type FuzzProbeSet struct {
 	Probes    []FuzzProbe
 }
 
-// pathPrefixes are prepended to tech-specific probes for path variation discovery.
-var pathPrefixes = []string{
-	"",
+// prefixEntry marks whether a prefix was discovered from pipeline data or hardcoded.
+type prefixEntry struct {
+	Path       string
+	Discovered bool // true = from crawl/discover data, false = hardcoded fallback
+}
+
+// defaultPrefixes are generic hardcoded prefixes used as fallback.
+var defaultPrefixes = []string{
 	"/manage",
 	"/admin",
 	"/api",
@@ -37,6 +42,33 @@ var pathPrefixes = []string{
 	"/internal",
 	"/system",
 	"/portal",
+}
+
+// mergePrefixes combines discovered (evidence-based) and hardcoded (fallback) prefixes.
+// Discovered prefixes come first since they have higher signal.
+func mergePrefixes(discovered []string, hardcoded []string) []prefixEntry {
+	seen := make(map[string]bool)
+	var merged []prefixEntry
+
+	// Discovered prefixes first — evidence-based, higher priority
+	for _, p := range discovered {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		merged = append(merged, prefixEntry{Path: p, Discovered: true})
+	}
+
+	// Hardcoded fallback — generic common paths
+	for _, p := range hardcoded {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		merged = append(merged, prefixEntry{Path: p, Discovered: false})
+	}
+
+	return merged
 }
 
 // AllFuzzProbeSets returns all registered probe sets.
@@ -55,13 +87,31 @@ func AllFuzzProbeSets() []FuzzProbeSet {
 	}
 }
 
-// ExpandWithPrefixes generates path variations for a probe using pathPrefixes.
-func ExpandWithPrefixes(probe FuzzProbe) []FuzzProbe {
+// ExpandWithPrefixes generates path variations for a probe using given prefixes.
+// The original path (no prefix) is always included first.
+func ExpandWithPrefixes(probe FuzzProbe, prefixes []prefixEntry) []FuzzProbe {
 	var expanded []FuzzProbe
-	for _, prefix := range pathPrefixes {
+	seen := make(map[string]bool)
+
+	// Always include the original path first (no prefix)
+	expanded = append(expanded, probe)
+	seen[probe.Path] = true
+
+	for _, prefix := range prefixes {
+		if prefix.Path == "" {
+			continue
+		}
+		newPath := prefix.Path + probe.Path
+		if seen[newPath] {
+			continue
+		}
+		seen[newPath] = true
+
 		p := probe
-		p.Path = prefix + probe.Path
-		if prefix != "" {
+		p.Path = newPath
+		if prefix.Discovered {
+			p.RuleID = probe.RuleID + "-dprefix"
+		} else {
 			p.RuleID = probe.RuleID + "-prefix"
 		}
 		expanded = append(expanded, p)

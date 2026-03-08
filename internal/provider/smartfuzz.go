@@ -53,6 +53,14 @@ const (
 	targetCDN
 )
 
+// hostBaseline captures a host's response to a non-existent path for custom 404 detection.
+type hostBaseline struct {
+	StatusCode   int
+	BodyLength   int
+	ReflectsPath bool // response body contained the random calibration string
+	Sampled      bool
+}
+
 func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 	extra := opts.Config
 
@@ -81,6 +89,9 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 
 	// Load probe sets
 	allSets := AllFuzzProbeSets()
+
+	// Load discovered path prefixes per host (from crawl + discover stages)
+	discoveredPrefixes := extractHostPrefixes(opts.WorkDir)
 
 	// Prepare output file
 	os.MkdirAll(filepath.Dir(opts.Output), 0755)
@@ -122,6 +133,29 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 
+	// ── Phase 0: Baseline calibration (custom 404 detection) ──
+	// Send a random-path request to each host to fingerprint their 404 response.
+	baselines := make(map[string]hostBaseline, len(targets))
+	{
+		var blMu sync.Mutex
+		for _, target := range targets {
+			if ctx.Err() != nil {
+				break
+			}
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(t fuzzTarget) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				bl := calibrateHost(ctx, client, t.URL)
+				blMu.Lock()
+				baselines[t.URL] = bl
+				blMu.Unlock()
+			}(target)
+		}
+		wg.Wait()
+	}
+
 	// Track runtime-discovered tech per host
 	var discoveredTechMu sync.Mutex
 	discoveredTech := make(map[string][]string) // URL → []tech
@@ -134,11 +168,14 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 		}
 
 		class := classifyTarget(target)
-		probes := selectFuzzProbes(allSets, target, class, cdnMode, prefixExpansion)
+		hostPrefixes := discoveredPrefixes[target.URL]
+		probes := selectFuzzProbes(allSets, target, class, cdnMode, prefixExpansion, hostPrefixes)
 
 		if maxProbesPerHost > 0 && len(probes) > maxProbesPerHost {
 			probes = probes[:maxProbesPerHost]
 		}
+
+		bl := baselines[target.URL]
 
 		for _, probe := range probes {
 			if ctx.Err() != nil {
@@ -148,7 +185,7 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 			wg.Add(1)
 			sem <- struct{}{}
 
-			go func(t fuzzTarget, p FuzzProbe) {
+			go func(t fuzzTarget, p FuzzProbe, baseline hostBaseline) {
 				defer wg.Done()
 				defer func() { <-sem }()
 
@@ -156,7 +193,7 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 				probeSent++
 				mu.Unlock()
 
-				finding := executeFuzzProbe(ctx, client, t, p)
+				finding := executeFuzzProbe(ctx, client, t, p, baseline)
 				if finding != nil {
 					emit(*finding)
 
@@ -167,7 +204,7 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 						discoveredTechMu.Unlock()
 					}
 				}
-			}(target, probe)
+			}(target, probe, bl)
 		}
 
 		// CORS probe
@@ -213,10 +250,14 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 			}
 
 			// Get tech-specific probes that weren't already sent
-			probes := selectTechDiscoveryProbes(allSets, enrichedTarget, target.Tech, prefixExpansion)
+			hostPfx := discoveredPrefixes[target.URL]
+			mergedPfx := mergePrefixes(hostPfx, defaultPrefixes)
+			probes := selectTechDiscoveryProbes(allSets, enrichedTarget, target.Tech, prefixExpansion, mergedPfx)
 			if len(probes) == 0 {
 				continue
 			}
+
+			bl2 := baselines[target.URL]
 
 			for _, probe := range probes {
 				if ctx.Err() != nil {
@@ -226,7 +267,7 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 				wg.Add(1)
 				sem <- struct{}{}
 
-				go func(t fuzzTarget, p FuzzProbe) {
+				go func(t fuzzTarget, p FuzzProbe, baseline hostBaseline) {
 					defer wg.Done()
 					defer func() { <-sem }()
 
@@ -234,12 +275,12 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 					probeSent++
 					mu.Unlock()
 
-					finding := executeFuzzProbe(ctx, client, t, p)
+					finding := executeFuzzProbe(ctx, client, t, p, baseline)
 					if finding != nil {
 						finding.Source = "tech-discovery"
 						emit(*finding)
 					}
-				}(target, probe)
+				}(target, probe, bl2)
 			}
 		}
 
@@ -259,7 +300,7 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 			wg.Add(1)
 			sem <- struct{}{}
 
-			go func(d discoverFuzzTarget) {
+			go func(d discoverFuzzTarget, baseline hostBaseline) {
 				defer wg.Done()
 				defer func() { <-sem }()
 
@@ -267,11 +308,11 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 				probeSent++
 				mu.Unlock()
 
-				finding := executeDiscoveryProbe(ctx, client, d)
+				finding := executeDiscoveryProbe(ctx, client, d, baseline)
 				if finding != nil {
 					emit(*finding)
 				}
-			}(dt)
+			}(dt, baselines[dt.BaseURL])
 		}
 
 		wg.Wait()
@@ -291,6 +332,63 @@ func (s *SmartFuzz) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 			"tech_discovered": len(discoveredTech),
 		},
 	}, nil
+}
+
+// ── Baseline Calibration (Custom 404 Detection) ──
+
+// calibrateHost sends a request to a random non-existent path and records
+// the response as a baseline. This detects custom 404 pages that return 200.
+func calibrateHost(ctx context.Context, client *http.Client, baseURL string) hostBaseline {
+	randStr := fmt.Sprintf("%x", time.Now().UnixNano())
+	if len(randStr) > 12 {
+		randStr = randStr[:12]
+	}
+	calibratePath := "/rc0-" + randStr
+
+	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimRight(baseURL, "/")+calibratePath, nil)
+	if err != nil {
+		return hostBaseline{}
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; recon0-probe/1.0)")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return hostBaseline{}
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024*1024))
+	if err != nil {
+		return hostBaseline{}
+	}
+
+	return hostBaseline{
+		StatusCode:   resp.StatusCode,
+		BodyLength:   len(body),
+		ReflectsPath: strings.Contains(string(body), randStr),
+		Sampled:      true,
+	}
+}
+
+// isLikelyCustom404 checks if a response matches the host's 404 baseline.
+// Returns true if the response looks like a custom 404 page.
+func isLikelyCustom404(bl hostBaseline, statusCode int, bodyLen int) bool {
+	if !bl.Sampled {
+		return false
+	}
+	if statusCode != bl.StatusCode {
+		return false
+	}
+	// Body length similarity: within ±10% or ±100 bytes (whichever is larger)
+	tolerance := bl.BodyLength / 10
+	if tolerance < 100 {
+		tolerance = 100
+	}
+	diff := bodyLen - bl.BodyLength
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= tolerance
 }
 
 // ── Target Parsing ──
@@ -345,19 +443,28 @@ func classifyTarget(t fuzzTarget) targetClass {
 
 // ── Probe Selection ──
 
-func selectFuzzProbes(allSets []FuzzProbeSet, target fuzzTarget, class targetClass, cdnMode string, prefixExpansion bool) []FuzzProbe {
+func selectFuzzProbes(allSets []FuzzProbeSet, target fuzzTarget, class targetClass, cdnMode string, prefixExpansion bool, hostDiscoveredPrefixes []string) []FuzzProbe {
 	var probes []FuzzProbe
+
+	// Merge discovered (evidence-based) + hardcoded (fallback) prefixes
+	var merged []prefixEntry
+	if prefixExpansion {
+		merged = mergePrefixes(hostDiscoveredPrefixes, defaultPrefixes)
+	}
 
 	for _, set := range allSets {
 		for _, probe := range set.Probes {
 			// Universal probes: always sent
 			if probe.Universal {
-				// CDN mode: skip non-critical universal probes for CDN hosts
 				if class == targetCDN && cdnMode == "skip" {
 					continue
 				}
-				probes = append(probes, probe)
-				probes[len(probes)-1].RuleID = probe.RuleID // preserve original
+				// Universal probes ALSO get prefix expansion with discovered paths
+				if prefixExpansion && len(merged) > 0 {
+					probes = append(probes, ExpandWithPrefixes(probe, merged)...)
+				} else {
+					probes = append(probes, probe)
+				}
 				continue
 			}
 
@@ -376,14 +483,7 @@ func selectFuzzProbes(allSets []FuzzProbeSet, target fuzzTarget, class targetCla
 			}
 
 			if prefixExpansion {
-				expanded := ExpandWithPrefixes(probe)
-				for i := range expanded {
-					expanded[i].RuleID = probe.RuleID
-					if i > 0 {
-						expanded[i].RuleID = probe.RuleID + "-prefix"
-					}
-				}
-				probes = append(probes, expanded...)
+				probes = append(probes, ExpandWithPrefixes(probe, merged)...)
 			} else {
 				probes = append(probes, probe)
 			}
@@ -394,7 +494,7 @@ func selectFuzzProbes(allSets []FuzzProbeSet, target fuzzTarget, class targetCla
 }
 
 // selectTechDiscoveryProbes returns probes for newly discovered tech that weren't already sent.
-func selectTechDiscoveryProbes(allSets []FuzzProbeSet, enrichedTarget fuzzTarget, originalTech []string, prefixExpansion bool) []FuzzProbe {
+func selectTechDiscoveryProbes(allSets []FuzzProbeSet, enrichedTarget fuzzTarget, originalTech []string, prefixExpansion bool, prefixes []prefixEntry) []FuzzProbe {
 	var probes []FuzzProbe
 
 	for _, set := range allSets {
@@ -430,8 +530,8 @@ func selectTechDiscoveryProbes(allSets []FuzzProbeSet, enrichedTarget fuzzTarget
 				continue // universal already sent
 			}
 
-			if prefixExpansion {
-				probes = append(probes, ExpandWithPrefixes(probe)...)
+			if prefixExpansion && len(prefixes) > 0 {
+				probes = append(probes, ExpandWithPrefixes(probe, prefixes)...)
 			} else {
 				probes = append(probes, probe)
 			}
@@ -469,7 +569,7 @@ func appendTechIfNew(techs []string, newTech string) []string {
 
 // ── Probe Execution ──
 
-func executeFuzzProbe(ctx context.Context, client *http.Client, target fuzzTarget, probe FuzzProbe) *smartFuzzFinding {
+func executeFuzzProbe(ctx context.Context, client *http.Client, target fuzzTarget, probe FuzzProbe, baseline hostBaseline) *smartFuzzFinding {
 	probeURL := strings.TrimRight(target.URL, "/") + probe.Path
 
 	method := probe.Method
@@ -519,6 +619,7 @@ func executeFuzzProbe(ctx context.Context, client *http.Client, target fuzzTarge
 	}
 
 	bodyStr := string(body)
+	baselineMatch := isLikelyCustom404(baseline, resp.StatusCode, len(body))
 
 	// Special case: heapdump/pprof heap — check for large binary response
 	if probe.RuleID == "spring-actuator-heapdump" || probe.RuleID == "go-pprof-heap" {
@@ -572,13 +673,30 @@ func executeFuzzProbe(ctx context.Context, client *http.Client, target fuzzTarge
 		return nil
 	}
 
+	// Path reflection check: if the server echoes paths in 404 responses,
+	// check if our probe path appears in the body (likely a custom 404)
+	if baseline.ReflectsPath && baselineMatch {
+		// Server reflects paths AND body size matches baseline — very likely custom 404
+		// Only override if ExpectBody strongly confirms it's real
+		if len(probe.ExpectBody) == 0 || !fuzzContainsExpected(bodyStr, probe.ExpectBody) {
+			return nil
+		}
+	}
+
 	// Expect body match
 	if len(probe.ExpectBody) > 0 {
 		if !fuzzContainsExpected(bodyStr, probe.ExpectBody) {
 			return nil
 		}
-	} else if len(body) == 0 {
-		return nil
+		// ExpectBody matched — this is a real finding even if baseline matched
+	} else {
+		// No ExpectBody: rely on baseline check to filter custom 404s
+		if baselineMatch {
+			return nil
+		}
+		if len(body) == 0 {
+			return nil
+		}
 	}
 
 	evidence := bodyStr
@@ -587,7 +705,9 @@ func executeFuzzProbe(ctx context.Context, client *http.Client, target fuzzTarge
 	}
 
 	source := "known-path"
-	if strings.HasSuffix(probe.RuleID, "-prefix") {
+	if strings.HasSuffix(probe.RuleID, "-dprefix") {
+		source = "discovered-prefix"
+	} else if strings.HasSuffix(probe.RuleID, "-prefix") {
 		source = "prefix-expansion"
 	}
 
@@ -605,7 +725,7 @@ func executeFuzzProbe(ctx context.Context, client *http.Client, target fuzzTarge
 }
 
 // executeDiscoveryProbe sends a discovery-based fuzz request and evaluates the response.
-func executeDiscoveryProbe(ctx context.Context, client *http.Client, dt discoverFuzzTarget) *smartFuzzFinding {
+func executeDiscoveryProbe(ctx context.Context, client *http.Client, dt discoverFuzzTarget, baseline hostBaseline) *smartFuzzFinding {
 	probeURL := strings.TrimRight(dt.BaseURL, "/") + dt.Path
 
 	req, err := http.NewRequestWithContext(ctx, dt.Method, probeURL, nil)
@@ -627,6 +747,11 @@ func executeDiscoveryProbe(ctx context.Context, client *http.Client, dt discover
 
 	// Only interested in 200 responses for discovery
 	if resp.StatusCode != 200 {
+		return nil
+	}
+
+	// Custom 404 baseline check — critical for discovery probes which have no ExpectBody
+	if isLikelyCustom404(baseline, resp.StatusCode, len(body)) {
 		return nil
 	}
 

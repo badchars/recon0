@@ -55,6 +55,98 @@ var extensionSwaps = map[string][]string{
 // backupExtensions are tried for files without a known extension.
 var backupExtensions = []string{".bak", ".old", ".backup", ".save", ".swp", ".orig"}
 
+// ── Discovered Prefix Extraction ──
+
+// extractHostPrefixes reads discovered URLs (endpoints.json + urls.txt) and
+// extracts unique path prefixes per host. This is the core of smart fuzzing:
+// every sub-path found during crawl/discover becomes a prefix to try known
+// probes under (e.g. /manage/ found → try /manage/swagger.json).
+func extractHostPrefixes(workDir string) map[string][]string {
+	prefixSets := make(map[string]map[string]bool)
+
+	endpointsFile := filepath.Join(workDir, "output", "endpoints.json")
+	addPrefixesFromJSONFile(endpointsFile, prefixSets)
+
+	urlsFile := filepath.Join(workDir, "output", "urls.txt")
+	addPrefixesFromURLList(urlsFile, prefixSets)
+
+	result := make(map[string][]string, len(prefixSets))
+	for baseURL, prefixes := range prefixSets {
+		list := make([]string, 0, len(prefixes))
+		for p := range prefixes {
+			list = append(list, p)
+		}
+		result[baseURL] = list
+	}
+	return result
+}
+
+func addPrefixesFromJSONFile(path string, prefixSets map[string]map[string]bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		var ep struct {
+			URL string `json:"url"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &ep) != nil || ep.URL == "" {
+			continue
+		}
+		addURLToPrefixSets(ep.URL, prefixSets)
+	}
+}
+
+func addPrefixesFromURLList(path string, prefixSets map[string]map[string]bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" {
+			addURLToPrefixSets(line, prefixSets)
+		}
+	}
+}
+
+func addURLToPrefixSets(rawURL string, prefixSets map[string]map[string]bool) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return
+	}
+
+	baseURL := parsed.Scheme + "://" + parsed.Host
+	if prefixSets[baseURL] == nil {
+		prefixSets[baseURL] = make(map[string]bool)
+	}
+
+	path := strings.Trim(parsed.Path, "/")
+	if path == "" {
+		return
+	}
+
+	parts := strings.Split(path, "/")
+
+	// Skip file-like last segment (has extension like .js, .css, .html, .php)
+	end := len(parts)
+	if end > 0 && strings.Contains(parts[end-1], ".") {
+		end--
+	}
+
+	for i := 1; i <= end; i++ {
+		prefix := "/" + strings.Join(parts[:i], "/")
+		prefixSets[baseURL][prefix] = true
+	}
+}
+
 // ── Pattern Dedup ──
 
 type urlPattern struct {

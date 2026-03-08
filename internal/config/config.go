@@ -106,7 +106,7 @@ func Defaults() *Config {
 				"cdn_mode":           "critical_only",
 				"prefix_expansion":   true,
 				"discovery_fuzz":     true,
-				"max_probes_per_host": 100,
+				"max_probes_per_host": 500,
 			}},
 		},
 	}

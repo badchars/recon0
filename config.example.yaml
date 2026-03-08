@@ -103,7 +103,7 @@ providers:
     cdn_mode: critical_only  # skip | critical_only | full
     prefix_expansion: true   # /actuator/env → /manage/actuator/env, etc.
     discovery_fuzz: true     # fuzz based on discovered endpoints
-    max_probes_per_host: 100 # max probes per host
+    max_probes_per_host: 500 # max probes per host (higher for discovered-prefix mode)
     # Features:
     #   Universal probes: .env, .git, actuator/health, swagger.json (ALL hosts)
     #   Runtime tech discovery: if /actuator/health returns 200 → run all Spring probes
