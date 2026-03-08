@@ -3,6 +3,7 @@ package provider
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -213,8 +214,12 @@ func startProgressMonitor(ctx context.Context, opts *RunOpts, provName, stageNam
 					staleTicks++
 					// Log "still running" every 30s when no new output
 					if staleTicks%6 == 0 && count > 0 {
-						logger.Provider(provName, fmt.Sprintf("still running — %s lines (%s)",
-							formatNumber(count), formatDur(time.Since(start))))
+						msg := fmt.Sprintf("still running — %s lines (%s)",
+							formatNumber(count), formatDur(time.Since(start)))
+						if last := lastJSONField(file, "host"); last != "" {
+							msg += fmt.Sprintf(" — last: %s", last)
+						}
+						logger.Provider(provName, msg)
 					}
 				}
 
@@ -247,6 +252,40 @@ func formatNumber(n int) string {
 }
 
 // ── Helpers ──
+
+// lastJSONField reads the last line of a JSONL file and extracts a string field.
+// Used by the progress monitor to show "last: host" when a provider stalls.
+func lastJSONField(path, field string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+
+	var lastLine []byte
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
+	for scanner.Scan() {
+		lastLine = scanner.Bytes()
+	}
+	if len(lastLine) == 0 {
+		return ""
+	}
+
+	var m map[string]json.RawMessage
+	if json.Unmarshal(lastLine, &m) != nil {
+		return ""
+	}
+	raw, ok := m[field]
+	if !ok {
+		return ""
+	}
+	var val string
+	if json.Unmarshal(raw, &val) != nil {
+		return ""
+	}
+	return val
+}
 
 // LineCount counts the number of lines in a file.
 func LineCount(path string) int {
