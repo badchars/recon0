@@ -95,22 +95,22 @@ providers:
     llm_base_url: ""         # ollama: http://localhost:11434/v1
     llm_max_tokens: 4096
 
-  activeprobe:
-    enabled: true            # lightweight Go-native HTTP prober
+  smartfuzz:
+    enabled: true            # smart fuzzer: known-path + discovery-based probing
     timeout: 10s             # HTTP request timeout per probe
-    max_concurrent: 20       # concurrent probe workers
-    skip_generic: false      # skip generic probes (/.env, /.git, etc.)
+    max_concurrent: 30       # concurrent probe workers
     skip_cors: false         # skip CORS misconfiguration check
-    # Probes run based on httpx tech fingerprints:
-    #   Generic: .env, .git, server-status (all hosts)
-    #   Spring Boot: actuator endpoints (Java/Spring hosts)
-    #   WordPress: wp-config backups, xmlrpc, user enum
-    #   Node.js: package.json, GraphQL introspection
-    #   Laravel/PHP: debug logs, telescope, phpinfo
-    #   Django: admin panel, debug toolbar
-    #   .NET: elmah, trace, web.config
-    #   Go: pprof, expvar debug endpoints
-    #   CORS: origin reflection check
+    cdn_mode: critical_only  # skip | critical_only | full
+    prefix_expansion: true   # /actuator/env → /manage/actuator/env, etc.
+    discovery_fuzz: true     # fuzz based on discovered endpoints
+    max_probes_per_host: 100 # max probes per host
+    # Features:
+    #   Universal probes: .env, .git, actuator/health, swagger.json (ALL hosts)
+    #   Runtime tech discovery: if /actuator/health returns 200 → run all Spring probes
+    #   Prefix expansion: tries /manage/, /admin/, /api/, /v1/, /v2/ variations
+    #   Tech-specific: Spring Boot, WordPress, Node.js, Laravel, Django, .NET, Go
+    #   Discovery-based: path siblings, extension swaps from endpoints.json
+    #   CDN-aware: reduces probing for CDN-hosted targets
 
   nuclei:
     enabled: false # run manually on filtered targets

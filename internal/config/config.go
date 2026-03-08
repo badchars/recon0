@@ -99,11 +99,14 @@ func Defaults() *Config {
 				"llm_max_tokens": 4096,
 			}},
 			"nuclei":      {Enabled: boolPtr(false), Extra: map[string]any{"severity": []any{"medium", "high", "critical"}}},
-			"activeprobe": {Enabled: boolPtr(true), Extra: map[string]any{
-				"timeout":        "10s",
-				"max_concurrent": 20,
-				"skip_generic":   false,
-				"skip_cors":      false,
+			"smartfuzz": {Enabled: boolPtr(true), Extra: map[string]any{
+				"timeout":            "10s",
+				"max_concurrent":     30,
+				"skip_cors":          false,
+				"cdn_mode":           "critical_only",
+				"prefix_expansion":   true,
+				"discovery_fuzz":     true,
+				"max_probes_per_host": 100,
 			}},
 		},
 	}

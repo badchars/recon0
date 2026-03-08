@@ -63,7 +63,7 @@ var Stages = []Stage{
 	{
 		Name:      "vuln",
 		Desc:      "Vulnerability scanning",
-		Providers: []string{"nuclei", "activeprobe"},
+		Providers: []string{"nuclei", "smartfuzz"},
 		Parallel:  true,
 	},
 }

@@ -61,7 +61,7 @@ recon0 run target.com
  │  6. DISCOVER       discover          Endpoint extraction from HAR/JS     │
  │  7. ANALYZE        analyzer          DSL engine: secrets, tokens, paths  │
  │  8. COLLECT        collector         Intelligence report + LLM analysis  │
- │  9. VULN           nuclei + probe    Vulnerability scanning + probes     │
+ │  9. VULN           nuclei+smartfuzz  Vulnerability scanning + fuzzing    │
  └────────────────────────────────────────────────────────────────────────────┘
      |
      v
@@ -184,7 +184,7 @@ $ recon0 providers
   discover       discover     enabled    (built-in)
   analyzer       analyze      enabled    (built-in)
   collector      collect      enabled    (built-in)
-  activeprobe    vuln         enabled    (built-in)
+  smartfuzz      vuln         enabled    (built-in)
   nuclei         vuln         disabled   /usr/local/bin/nuclei
 ```
 
@@ -295,7 +295,7 @@ recon0 status --remote 10.0.0.5:9090
 | `discover` | discover | Parses HAR request logs and JavaScript files to extract API endpoints, HTTP methods, query parameters, and request bodies. Deduplicates by method+URL. |
 | `analyzer` | analyze | Runs the DSL rule engine against JS files, HAR bodies, HTTP headers, and discovered endpoints. Detects secrets, tokens, cloud assets, misconfigurations, and interesting paths. |
 | `collector` | collect | Aggregates all stage outputs into a structured intelligence report (`intel.json`). Optionally enriches with LLM analysis via OpenAI or Ollama. |
-| `activeprobe` | vuln | Go-native HTTP prober. Sends targeted requests based on httpx tech fingerprints — Spring Boot actuator, WordPress wp-config, Laravel debug, Go pprof, .NET elmah, CORS origin reflection, and more. |
+| `smartfuzz` | vuln | Smart fuzzer: universal probes (every host), runtime tech discovery, prefix expansion (`/manage/actuator/env`), discovery-based fuzzing from `endpoints.json`, CDN-aware filtering. |
 
 ### Provider Architecture
 
@@ -362,9 +362,9 @@ providers:
 
 ---
 
-## Active Probing
+## Smart Fuzzing
 
-The `activeprobe` provider sends targeted HTTP requests based on technology fingerprints detected by httpx. This is not blind fuzzing — probes are selected based on what's actually running.
+The `smartfuzz` provider replaces traditional blind fuzzing with an intelligent, multi-phase approach. It combines universal probes (sent to every host), runtime tech discovery, prefix expansion, and discovery-based fuzzing from pipeline data.
 
 | Tech Stack | Probes | Examples |
 |------------|--------|---------|
@@ -554,12 +554,15 @@ providers:
     llm_base_url: ""
     llm_max_tokens: 4096
 
-  activeprobe:
+  smartfuzz:
     enabled: true
     timeout: 10s
-    max_concurrent: 20
-    skip_generic: false         # Skip generic probes
+    max_concurrent: 30
     skip_cors: false            # Skip CORS checks
+    cdn_mode: critical_only     # skip | critical_only | full
+    prefix_expansion: true      # Path prefix variations
+    discovery_fuzz: true        # Fuzz from discovered endpoints
+    max_probes_per_host: 100
 
   nuclei:
     enabled: false              # Enable manually for filtered targets
@@ -659,8 +662,9 @@ internal/
 │   ├── discover.go        Endpoint extraction from HAR/JS
 │   ├── analyzer.go        DSL engine wrapper
 │   ├── collector.go       Intelligence aggregation + LLM
-│   ├── activeprobe.go     Tech-aware HTTP probing
-│   └── probes.go          Probe definitions by tech stack
+│   ├── smartfuzz.go       Smart fuzzer (universal probes + tech discovery + CDN-aware)
+│   ├── smartfuzz_probes.go  Probe definitions (universal, Spring, WordPress, Go, .NET, ...)
+│   └── smartfuzz_discover.go  Discovery-based fuzzing (path siblings, extension swap)
 └── queue/queue.go         Persistent job queue (JSON file-backed)
 ```
 
