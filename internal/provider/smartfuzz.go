@@ -1084,6 +1084,17 @@ var headerTechRules = []headerTechRule{
 	{"x-generator", "joomla", "Joomla"},
 	{"x-turbo-charged-by", "litespeed", "LiteSpeed"},
 	{"x-debug-token", "", "Symfony"},
+	// Modern frameworks (2025+)
+	{"server", "quarkus", "Quarkus"},
+	{"server", "micronaut", "Micronaut"},
+	{"server", "fiber", "Fiber"},
+	{"server", "elysia", "Elysia"},
+	{"server", "bun", "Bun"},
+	{"server", "hono", "Hono"},
+	{"server", "litestar", "Litestar"},
+	{"x-powered-by", "hono", "Hono"},
+	{"x-powered-by", "elysia", "Elysia"},
+	{"x-powered-by", "fiber", "Fiber"},
 }
 
 var cookieTechRules = []cookieTechRule{

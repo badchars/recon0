@@ -84,6 +84,13 @@ func AllFuzzProbeSets() []FuzzProbeSet {
 		djangoFuzzProbes(),
 		dotnetFuzzProbes(),
 		goFuzzProbes(),
+		aiLLMProbes(),
+		vectorDBProbes(),
+		quarkusFuzzProbes(),
+		micronautFuzzProbes(),
+		devopsFuzzProbes(),
+		configFileProbes(),
+		modernJSFuzzProbes(),
 	}
 }
 
@@ -460,6 +467,175 @@ func goFuzzProbes() FuzzProbeSet {
 			{Path: "/debug/vars", ExpectStatus: []int{200}, ExpectBody: []string{"cmdline", "memstats"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "go-expvar", RuleName: "Go expvar Debug Variables Exposed", Description: "Application variables exposed as JSON"},
 			{Path: "/debug/requests", ExpectStatus: []int{200}, ExpectBody: []string{"Trace", "Family"}, Severity: "medium", RuleID: "go-debug-requests", RuleName: "Go Debug Requests Exposed", Description: "golang.org/x/net/trace request traces exposed"},
 			{Path: "/debug/events", ExpectStatus: []int{200}, ExpectBody: []string{"Event", "Family"}, Severity: "medium", RuleID: "go-debug-events", RuleName: "Go Debug Events Exposed", Description: "golang.org/x/net/trace events exposed"},
+		},
+	}
+}
+
+// ── AI/LLM Endpoints (Universal — often deployed without auth) ──
+
+func aiLLMProbes() FuzzProbeSet {
+	return FuzzProbeSet{
+		Name:      "ai-llm",
+		TechMatch: nil,
+		Probes: []FuzzProbe{
+			// Ollama
+			{Path: "/api/tags", ExpectStatus: []int{200}, ExpectBody: []string{"models"}, RejectBody: []string{"<html", "<HTML"}, Severity: "high", RuleID: "ollama-api-tags", RuleName: "Ollama Model List Exposed", Description: "Ollama API listing all loaded models", Universal: true, TechDiscover: "Ollama"},
+			{Path: "/api/version", ExpectStatus: []int{200}, ExpectBody: []string{"version"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "ollama-version", RuleName: "Ollama Version Exposed", Description: "Ollama version information accessible", Universal: true},
+			// OpenAI-compatible API (vLLM, LocalAI, LiteLLM, etc.)
+			{Path: "/v1/models", ExpectStatus: []int{200}, ExpectBody: []string{`"data"`, `"id"`}, RejectBody: []string{"<html"}, Severity: "high", RuleID: "openai-compat-models", RuleName: "OpenAI-Compatible Model List Exposed", Description: "OpenAI-compatible API listing available models", Universal: true},
+			// vLLM metrics
+			{Path: "/metrics", ExpectStatus: []int{200}, ExpectBody: []string{"vllm:", "model_name"}, Severity: "medium", RuleID: "vllm-metrics", RuleName: "vLLM Prometheus Metrics Exposed", Description: "vLLM model serving metrics accessible", Universal: true, TechDiscover: "vLLM"},
+			// LangServe
+			{Path: "/docs", ExpectStatus: []int{200}, ExpectBody: []string{"LangServe"}, Severity: "medium", RuleID: "langserve-docs", RuleName: "LangServe API Docs Exposed", Description: "LangServe FastAPI documentation accessible", Universal: true, TechDiscover: "LangServe"},
+			{Path: "/playground", ExpectStatus: []int{200}, ExpectBody: []string{"playground"}, RejectBody: []string{"Page Not Found", "404"}, Severity: "medium", RuleID: "langserve-playground", RuleName: "LangServe Playground Exposed", Description: "LangServe interactive playground accessible", Universal: true},
+			// MLflow
+			{Path: "/api/2.0/mlflow/experiments/search", ExpectStatus: []int{200}, ExpectBody: []string{"experiments"}, Severity: "high", RuleID: "mlflow-experiments", RuleName: "MLflow Experiments Exposed", Description: "MLflow experiment tracking API accessible without auth", Universal: true, TechDiscover: "MLflow"},
+			{Path: "/ajax-api/2.0/mlflow/runs/search", ExpectStatus: []int{200}, ExpectBody: []string{"runs"}, Severity: "high", RuleID: "mlflow-runs", RuleName: "MLflow Runs Exposed", Description: "MLflow run data accessible without auth", Universal: true},
+			// MCP (Model Context Protocol)
+			{Path: "/.well-known/mcp.json", ExpectStatus: []int{200}, ExpectBody: []string{"capabilities"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "mcp-manifest", RuleName: "MCP Manifest Exposed", Description: "Model Context Protocol server manifest accessible", Universal: true},
+		},
+	}
+}
+
+// ── Vector Databases (Universal — often deployed without auth) ──
+
+func vectorDBProbes() FuzzProbeSet {
+	return FuzzProbeSet{
+		Name:      "vector-db",
+		TechMatch: nil,
+		Probes: []FuzzProbe{
+			// Qdrant
+			{Path: "/collections", ExpectStatus: []int{200}, ExpectBody: []string{"collections"}, RejectBody: []string{"<html", "<HTML"}, Severity: "high", RuleID: "qdrant-collections", RuleName: "Qdrant Collections Exposed", Description: "Qdrant vector database collections accessible without auth", Universal: true, TechDiscover: "Qdrant"},
+			{Path: "/dashboard/", ExpectStatus: []int{200}, ExpectBody: []string{"Qdrant"}, Severity: "high", RuleID: "qdrant-dashboard", RuleName: "Qdrant Dashboard Exposed", Description: "Qdrant web dashboard accessible without auth", Universal: true},
+			// Weaviate
+			{Path: "/v1/schema", ExpectStatus: []int{200}, ExpectBody: []string{"classes"}, RejectBody: []string{"<html"}, Severity: "high", RuleID: "weaviate-schema", RuleName: "Weaviate Schema Exposed", Description: "Weaviate vector database schema accessible without auth", Universal: true, TechDiscover: "Weaviate"},
+			{Path: "/v1/meta", ExpectStatus: []int{200}, ExpectBody: []string{"version"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "weaviate-meta", RuleName: "Weaviate Meta Exposed", Description: "Weaviate version and meta information accessible", Universal: true},
+			// ChromaDB
+			{Path: "/api/v1/collections", ExpectStatus: []int{200}, ExpectBody: []string{"name"}, RejectBody: []string{"<html"}, Severity: "high", RuleID: "chromadb-collections", RuleName: "ChromaDB Collections Exposed", Description: "ChromaDB vector database collections accessible without auth", Universal: true, TechDiscover: "ChromaDB"},
+			{Path: "/api/v1/heartbeat", ExpectStatus: []int{200}, ExpectBody: []string{"nanosecond heartbeat"}, Severity: "info", RuleID: "chromadb-heartbeat", RuleName: "ChromaDB Heartbeat Exposed", Description: "ChromaDB health endpoint accessible", Universal: true},
+			// Milvus (Attu web UI)
+			{Path: "/webui/", ExpectStatus: []int{200}, ExpectBody: []string{"Milvus"}, Severity: "high", RuleID: "milvus-webui", RuleName: "Milvus Web UI Exposed", Description: "Milvus vector database web interface accessible without auth", Universal: true, TechDiscover: "Milvus"},
+		},
+	}
+}
+
+// ── Quarkus (TechMatch: Quarkus/Java) ──
+
+func quarkusFuzzProbes() FuzzProbeSet {
+	return FuzzProbeSet{
+		Name:      "quarkus",
+		TechMatch: []string{"Quarkus"},
+		Probes: []FuzzProbe{
+			{Path: "/q/health", ExpectStatus: []int{200}, ExpectBody: []string{`"status"`, `"checks"`}, Severity: "medium", RuleID: "quarkus-health", RuleName: "Quarkus Health Endpoint Exposed", Description: "Quarkus SmallRye Health endpoint accessible"},
+			{Path: "/q/health/live", ExpectStatus: []int{200}, ExpectBody: []string{`"status"`}, Severity: "info", RuleID: "quarkus-health-live", RuleName: "Quarkus Liveness Probe Exposed", Description: "Quarkus liveness probe accessible"},
+			{Path: "/q/health/ready", ExpectStatus: []int{200}, ExpectBody: []string{`"status"`}, Severity: "info", RuleID: "quarkus-health-ready", RuleName: "Quarkus Readiness Probe Exposed", Description: "Quarkus readiness probe accessible"},
+			{Path: "/q/metrics", ExpectStatus: []int{200}, ExpectBody: []string{"base_", "vendor_"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "quarkus-metrics", RuleName: "Quarkus Metrics Exposed", Description: "Quarkus MicroProfile Metrics endpoint accessible"},
+			{Path: "/q/openapi", ExpectStatus: []int{200}, ExpectBody: []string{"openapi", "paths"}, Severity: "info", RuleID: "quarkus-openapi", RuleName: "Quarkus OpenAPI Exposed", Description: "Quarkus OpenAPI spec accessible"},
+			{Path: "/q/swagger-ui", ExpectStatus: []int{200}, ExpectBody: []string{"swagger"}, Severity: "info", RuleID: "quarkus-swagger", RuleName: "Quarkus Swagger UI Exposed", Description: "Quarkus Swagger UI accessible"},
+			{Path: "/q/dev", ExpectStatus: []int{200}, ExpectBody: []string{"Quarkus", "Dev UI"}, Severity: "high", RuleID: "quarkus-dev-ui", RuleName: "Quarkus Dev UI Exposed", Description: "Quarkus Dev UI accessible — potential RCE via dev mode features"},
+			{Path: "/q/arc/beans", ExpectStatus: []int{200}, ExpectBody: []string{"beans"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "quarkus-arc-beans", RuleName: "Quarkus Arc Beans Exposed", Description: "Quarkus CDI bean listing accessible"},
+			{Path: "/q/arc/observers", ExpectStatus: []int{200}, ExpectBody: []string{"observers"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "quarkus-arc-observers", RuleName: "Quarkus Arc Observers Exposed", Description: "Quarkus CDI observer listing accessible"},
+		},
+	}
+}
+
+// ── Micronaut (TechMatch: Micronaut/Java) ──
+
+func micronautFuzzProbes() FuzzProbeSet {
+	return FuzzProbeSet{
+		Name:      "micronaut",
+		TechMatch: []string{"Micronaut"},
+		Probes: []FuzzProbe{
+			{Path: "/health", ExpectStatus: []int{200}, ExpectBody: []string{`"status"`, `"details"`}, RejectBody: []string{"<html"}, Severity: "info", RuleID: "micronaut-health", RuleName: "Micronaut Health Exposed", Description: "Micronaut health endpoint accessible"},
+			{Path: "/beans", ExpectStatus: []int{200}, ExpectBody: []string{"beans"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "micronaut-beans", RuleName: "Micronaut Beans Exposed", Description: "Micronaut bean listing accessible"},
+			{Path: "/info", ExpectStatus: []int{200}, ExpectBody: []string{"build"}, RejectBody: []string{"<html"}, Severity: "info", RuleID: "micronaut-info", RuleName: "Micronaut Info Exposed", Description: "Micronaut build info accessible"},
+			{Path: "/loggers", ExpectStatus: []int{200}, ExpectBody: []string{"loggers", "levels"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "micronaut-loggers", RuleName: "Micronaut Loggers Exposed", Description: "Micronaut logger configuration accessible and modifiable"},
+			{Path: "/routes", ExpectStatus: []int{200}, ExpectBody: []string{"routes"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "micronaut-routes", RuleName: "Micronaut Routes Exposed", Description: "Micronaut route listing reveals all API endpoints"},
+			{Path: "/env", ExpectStatus: []int{200}, ExpectBody: []string{"propertySources"}, Severity: "critical", RuleID: "micronaut-env", RuleName: "Micronaut Env Exposed", Description: "Micronaut environment properties exposed — may contain credentials"},
+			{Path: "/refresh", Method: "POST", ExpectStatus: []int{200}, Severity: "high", RuleID: "micronaut-refresh", RuleName: "Micronaut Refresh Endpoint Exposed", Description: "Micronaut refresh endpoint can reload configuration"},
+			{Path: "/threaddump", ExpectStatus: []int{200}, ExpectBody: []string{"threads"}, Severity: "high", RuleID: "micronaut-threaddump", RuleName: "Micronaut Thread Dump Exposed", Description: "Micronaut thread dump exposes internal execution"},
+			{Path: "/metrics", ExpectStatus: []int{200}, ExpectBody: []string{"names"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "micronaut-metrics", RuleName: "Micronaut Metrics Exposed", Description: "Micronaut metrics endpoint accessible"},
+		},
+	}
+}
+
+// ── DevOps/Cloud-Native Tools (Universal — infrastructure dashboards) ──
+
+func devopsFuzzProbes() FuzzProbeSet {
+	return FuzzProbeSet{
+		Name:      "devops-cloud-native",
+		TechMatch: nil,
+		Probes: []FuzzProbe{
+			// ArgoCD
+			{Path: "/api/v1/applications", ExpectStatus: []int{200}, ExpectBody: []string{"items"}, RejectBody: []string{"<html"}, Severity: "high", RuleID: "argocd-applications", RuleName: "ArgoCD Applications Exposed", Description: "ArgoCD application list accessible without auth", Universal: true},
+			{Path: "/argocd", ExpectStatus: []int{200}, ExpectBody: []string{"Argo CD"}, Severity: "high", RuleID: "argocd-ui", RuleName: "ArgoCD UI Exposed", Description: "ArgoCD web interface accessible", Universal: true},
+			// HashiCorp Vault
+			{Path: "/v1/sys/health", ExpectStatus: []int{200, 429, 472, 473, 501, 503}, ExpectBody: []string{"initialized"}, RejectBody: []string{"<html"}, Severity: "high", RuleID: "vault-health", RuleName: "HashiCorp Vault Health Exposed", Description: "Vault health endpoint accessible — reveals seal status", Universal: true},
+			{Path: "/v1/sys/seal-status", ExpectStatus: []int{200}, ExpectBody: []string{"sealed"}, RejectBody: []string{"<html"}, Severity: "critical", RuleID: "vault-seal-status", RuleName: "HashiCorp Vault Seal Status Exposed", Description: "Vault seal status accessible — infrastructure at risk", Universal: true},
+			{Path: "/ui/", ExpectStatus: []int{200}, ExpectBody: []string{"Vault"}, Severity: "high", RuleID: "vault-ui", RuleName: "HashiCorp Vault UI Exposed", Description: "Vault web UI accessible", Universal: true},
+			// HashiCorp Consul
+			{Path: "/v1/agent/self", ExpectStatus: []int{200}, ExpectBody: []string{"Config"}, RejectBody: []string{"<html"}, Severity: "high", RuleID: "consul-agent", RuleName: "Consul Agent API Exposed", Description: "Consul agent configuration accessible without auth", Universal: true},
+			// HashiCorp Nomad
+			{Path: "/v1/jobs", ExpectStatus: []int{200}, ExpectBody: []string{"ID"}, RejectBody: []string{"<html"}, Severity: "high", RuleID: "nomad-jobs", RuleName: "Nomad Jobs API Exposed", Description: "Nomad job list accessible without auth", Universal: true},
+			// Prometheus
+			{Path: "/api/v1/query", ExpectStatus: []int{200}, ExpectBody: []string{"status"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "prometheus-api", RuleName: "Prometheus API Exposed", Description: "Prometheus query API accessible", Universal: true},
+			{Path: "/graph", ExpectStatus: []int{200}, ExpectBody: []string{"Prometheus"}, Severity: "medium", RuleID: "prometheus-ui", RuleName: "Prometheus UI Exposed", Description: "Prometheus web UI accessible", Universal: true},
+			{Path: "/targets", ExpectStatus: []int{200}, ExpectBody: []string{"scrapePool", "activeTargets"}, Severity: "medium", RuleID: "prometheus-targets", RuleName: "Prometheus Targets Exposed", Description: "Prometheus scrape targets reveal internal infrastructure", Universal: true},
+			// Grafana
+			{Path: "/api/health", ExpectStatus: []int{200}, ExpectBody: []string{"database"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "grafana-health", RuleName: "Grafana Health Exposed", Description: "Grafana health endpoint accessible", Universal: true},
+			{Path: "/api/dashboards/home", ExpectStatus: []int{200}, ExpectBody: []string{"dashboard"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "grafana-dashboards", RuleName: "Grafana Dashboards Exposed", Description: "Grafana dashboards accessible without auth", Universal: true},
+			{Path: "/login", ExpectStatus: []int{200}, ExpectBody: []string{"Grafana"}, Severity: "info", RuleID: "grafana-login", RuleName: "Grafana Login Found", Description: "Grafana login page detected", Universal: true},
+			// Terraform
+			{Path: "/.terraform/terraform.tfstate", ExpectStatus: []int{200}, ExpectBody: []string{"terraform_version"}, RejectBody: []string{"<html"}, Severity: "critical", RuleID: "terraform-state", RuleName: "Terraform State File Exposed", Description: "Terraform state file contains infrastructure secrets and credentials", Universal: true},
+			// Portainer
+			{Path: "/portainer/", ExpectStatus: []int{200}, ExpectBody: []string{"Portainer"}, Severity: "high", RuleID: "portainer-ui", RuleName: "Portainer UI Exposed", Description: "Portainer Docker management UI accessible", Universal: true},
+			{Path: "/api/endpoints", ExpectStatus: []int{200}, ExpectBody: []string{"Endpoints"}, RejectBody: []string{"<html"}, Severity: "high", RuleID: "portainer-api", RuleName: "Portainer API Exposed", Description: "Portainer API accessible — Docker control", Universal: true},
+		},
+	}
+}
+
+// ── Config/Secret Files (Universal — deployment artifacts) ──
+
+func configFileProbes() FuzzProbeSet {
+	return FuzzProbeSet{
+		Name:      "config-files",
+		TechMatch: nil,
+		Probes: []FuzzProbe{
+			// .env variants
+			{Path: "/.env.local", ExpectStatus: []int{200}, ExpectBody: []string{"DB_", "API_", "SECRET", "PASSWORD", "KEY"}, RejectBody: []string{"<html", "<HTML", "<!DOCTYPE"}, Severity: "critical", RuleID: "env-local", RuleName: ".env.local Exposed", Description: "Local environment file with secrets accessible", Universal: true},
+			{Path: "/.env.production", ExpectStatus: []int{200}, ExpectBody: []string{"DB_", "API_", "SECRET", "PASSWORD", "KEY"}, RejectBody: []string{"<html", "<HTML", "<!DOCTYPE"}, Severity: "critical", RuleID: "env-production", RuleName: ".env.production Exposed", Description: "Production environment file with secrets accessible", Universal: true},
+			{Path: "/.env.staging", ExpectStatus: []int{200}, ExpectBody: []string{"DB_", "API_", "SECRET", "PASSWORD", "KEY"}, RejectBody: []string{"<html", "<HTML", "<!DOCTYPE"}, Severity: "critical", RuleID: "env-staging", RuleName: ".env.staging Exposed", Description: "Staging environment file accessible", Universal: true},
+			{Path: "/.env.development", ExpectStatus: []int{200}, ExpectBody: []string{"DB_", "API_", "SECRET", "PASSWORD", "KEY"}, RejectBody: []string{"<html", "<HTML", "<!DOCTYPE"}, Severity: "high", RuleID: "env-development", RuleName: ".env.development Exposed", Description: "Development environment file accessible", Universal: true},
+			{Path: "/.env.backup", ExpectStatus: []int{200}, ExpectBody: []string{"DB_", "API_", "SECRET", "PASSWORD", "KEY"}, RejectBody: []string{"<html", "<HTML", "<!DOCTYPE"}, Severity: "critical", RuleID: "env-backup", RuleName: ".env.backup Exposed", Description: "Backup of environment file accessible", Universal: true},
+			// Cloud platform configs
+			{Path: "/wrangler.toml", ExpectStatus: []int{200}, ExpectBody: []string{"name", "compatibility"}, RejectBody: []string{"<html", "<HTML"}, Severity: "high", RuleID: "cloudflare-wrangler", RuleName: "Cloudflare Workers Config Exposed", Description: "wrangler.toml reveals Cloudflare Workers configuration", Universal: true},
+			{Path: "/fly.toml", ExpectStatus: []int{200}, ExpectBody: []string{"app", "primary_region"}, RejectBody: []string{"<html", "<HTML"}, Severity: "medium", RuleID: "fly-config", RuleName: "Fly.io Config Exposed", Description: "fly.toml reveals deployment configuration", Universal: true},
+			// Docker
+			{Path: "/docker-compose.yml", ExpectStatus: []int{200}, ExpectBody: []string{"services", "image"}, RejectBody: []string{"<html", "<HTML"}, Severity: "high", RuleID: "docker-compose-yml", RuleName: "Docker Compose File Exposed", Description: "docker-compose.yml reveals service architecture and may contain credentials", Universal: true},
+			{Path: "/docker-compose.yaml", ExpectStatus: []int{200}, ExpectBody: []string{"services", "image"}, RejectBody: []string{"<html", "<HTML"}, Severity: "high", RuleID: "docker-compose-yaml", RuleName: "Docker Compose File Exposed", Description: "docker-compose.yaml reveals service architecture", Universal: true},
+			{Path: "/Dockerfile", ExpectStatus: []int{200}, ExpectBody: []string{"FROM", "RUN"}, RejectBody: []string{"<html", "<HTML"}, Severity: "medium", RuleID: "dockerfile-exposed", RuleName: "Dockerfile Exposed", Description: "Dockerfile reveals build process and base images", Universal: true},
+			// ORM/DB schemas
+			{Path: "/prisma/schema.prisma", ExpectStatus: []int{200}, ExpectBody: []string{"datasource", "model"}, RejectBody: []string{"<html"}, Severity: "high", RuleID: "prisma-schema", RuleName: "Prisma Schema Exposed", Description: "Prisma schema reveals database structure and connection info", Universal: true},
+			// Package manifests
+			{Path: "/composer.json", ExpectStatus: []int{200}, ExpectBody: []string{"require", "name"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "php-composer-json", RuleName: "PHP Composer JSON Exposed", Description: "PHP composer.json reveals dependencies and versions", Universal: true},
+			{Path: "/Gemfile", ExpectStatus: []int{200}, ExpectBody: []string{"source", "gem"}, RejectBody: []string{"<html"}, Severity: "medium", RuleID: "ruby-gemfile", RuleName: "Ruby Gemfile Exposed", Description: "Gemfile reveals Ruby dependencies", Universal: true},
+			{Path: "/Cargo.toml", ExpectStatus: []int{200}, ExpectBody: []string{"[package]", "name"}, RejectBody: []string{"<html"}, Severity: "info", RuleID: "rust-cargo-toml", RuleName: "Rust Cargo.toml Exposed", Description: "Cargo.toml reveals Rust package configuration", Universal: true},
+		},
+	}
+}
+
+// ── Modern JS Frameworks (Nuxt DevTools, tRPC, Scalar) ──
+
+func modernJSFuzzProbes() FuzzProbeSet {
+	return FuzzProbeSet{
+		Name:      "modern-js",
+		TechMatch: []string{"Nuxt", "Next.js", "Elysia", "Bun", "Hono"},
+		Probes: []FuzzProbe{
+			{Path: "/__nuxt_devtools__/client/", ExpectStatus: []int{200}, ExpectBody: []string{"Nuxt DevTools"}, Severity: "high", RuleID: "nuxt-devtools", RuleName: "Nuxt DevTools Exposed", Description: "Nuxt DevTools accessible in production — reveals internal state"},
+			{Path: "/_nuxt/builds/latest.json", ExpectStatus: []int{200}, ExpectBody: []string{"id"}, RejectBody: []string{"<html"}, Severity: "info", RuleID: "nuxt-build-info", RuleName: "Nuxt Build Info Exposed", Description: "Nuxt build information accessible"},
+			{Path: "/api/trpc", ExpectStatus: []int{200, 400, 500}, ExpectBody: []string{"error", "result"}, Severity: "info", RuleID: "trpc-endpoint", RuleName: "tRPC Endpoint Found", Description: "tRPC API endpoint detected"},
+			{Path: "/trpc", ExpectStatus: []int{200, 400, 500}, ExpectBody: []string{"error", "result"}, Severity: "info", RuleID: "trpc-endpoint-alt", RuleName: "tRPC Endpoint Found (alt)", Description: "tRPC API endpoint detected at alternative path"},
+			{Path: "/reference", ExpectStatus: []int{200}, ExpectBody: []string{"Scalar", "openapi"}, Severity: "info", RuleID: "scalar-api-docs", RuleName: "Scalar API Docs Exposed", Description: "Scalar API documentation accessible"},
 		},
 	}
 }

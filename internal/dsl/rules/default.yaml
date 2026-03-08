@@ -575,3 +575,207 @@ rules:
     source: [js]
     tags: [info, email]
     false_positive: ["(?i)example\\.com|test\\.com|placeholder|noreply"]
+
+  # ── AI/LLM Secrets ──
+
+  - id: anthropic-api-key
+    name: "Anthropic API Key"
+    severity: critical
+    pattern: "sk-ant-api03-[A-Za-z0-9_\\-]{93}AA"
+    source: [js, har]
+    tags: [secret, ai, anthropic]
+
+  - id: openai-api-key-v2
+    name: "OpenAI API Key (v2 Project)"
+    severity: critical
+    pattern: "sk-proj-[A-Za-z0-9_\\-]{20,}"
+    source: [js, har]
+    tags: [secret, ai, openai]
+
+  - id: huggingface-token
+    name: "HuggingFace Token"
+    severity: critical
+    pattern: "hf_[A-Za-z0-9]{34,}"
+    source: [js, har]
+    tags: [secret, ai, huggingface]
+
+  - id: replicate-api-token
+    name: "Replicate API Token"
+    severity: critical
+    pattern: "r8_[A-Za-z0-9]{40}"
+    source: [js, har]
+    tags: [secret, ai, replicate]
+
+  - id: cohere-api-key
+    name: "Cohere API Key"
+    severity: high
+    pattern: "(?i)co-[A-Za-z0-9]{40,}"
+    source: [js, har]
+    tags: [secret, ai, cohere]
+
+  - id: groq-api-key
+    name: "Groq API Key"
+    severity: critical
+    pattern: "gsk_[A-Za-z0-9]{48,}"
+    source: [js, har]
+    tags: [secret, ai, groq]
+
+  - id: together-api-key
+    name: "Together AI API Key"
+    severity: high
+    pattern: "(?i)together[_\\-]?(?:api[_\\-]?)?key[\\s=:\"']+[A-Za-z0-9]{40,}"
+    source: [js, har]
+    tags: [secret, ai, together]
+
+  # ── Platform Secrets (2025+) ──
+
+  - id: vercel-token
+    name: "Vercel Token"
+    severity: high
+    pattern: "(?i)vercel[_\\-]?token[\\s=:\"']+[A-Za-z0-9]{24,}"
+    source: [js, har]
+    tags: [secret, vercel]
+
+  - id: supabase-service-key
+    name: "Supabase Service Role Key"
+    severity: critical
+    pattern: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\\.[A-Za-z0-9_\\-]{50,}\\.[A-Za-z0-9_\\-]{20,}"
+    source: [js, har]
+    tags: [secret, supabase]
+
+  - id: planetscale-token
+    name: "PlanetScale Token"
+    severity: critical
+    pattern: "pscale_tkn_[A-Za-z0-9_\\-]{30,}"
+    source: [js, har]
+    tags: [secret, planetscale]
+
+  - id: neon-api-key
+    name: "Neon Database API Key"
+    severity: high
+    pattern: "(?i)neon[_\\-]?api[_\\-]?key[\\s=:\"']+[A-Za-z0-9]{20,}"
+    source: [js, har]
+    tags: [secret, neon]
+
+  - id: railway-token
+    name: "Railway Token"
+    severity: high
+    pattern: "(?i)railway[_\\-]?token[\\s=:\"']+[A-Za-z0-9_\\-]{30,}"
+    source: [js, har]
+    tags: [secret, railway]
+
+  - id: linear-api-key
+    name: "Linear API Key"
+    severity: high
+    pattern: "lin_api_[A-Za-z0-9]{40,}"
+    source: [js, har]
+    tags: [secret, linear]
+
+  - id: doppler-token
+    name: "Doppler Service Token"
+    severity: critical
+    pattern: "dp\\.(?:st|ct|sa|scrt)\\.[A-Za-z0-9_\\-]{40,}"
+    source: [js, har]
+    tags: [secret, doppler]
+
+  - id: postman-api-key
+    name: "Postman API Key"
+    severity: high
+    pattern: "PMAK-[A-Za-z0-9]{24}-[A-Za-z0-9]{34}"
+    source: [js, har]
+    tags: [secret, postman]
+
+  # ── Cloud-Native Paths (2025+) ──
+
+  - id: ai-llm-endpoint
+    name: "AI/LLM Endpoint Detected"
+    severity: high
+    pattern: "(?i)/(?:api/tags|v1/models|api/generate|api/chat|v1/completions|v1/chat/completions|ollama|api/2\\.0/mlflow)(?:$|\\?|/)"
+    source: [har, endpoints]
+    tags: [path, ai]
+
+  - id: vector-db-endpoint
+    name: "Vector Database Endpoint Detected"
+    severity: high
+    pattern: "(?i)/(?:collections|v1/schema|v1/meta|api/v1/collections|qdrant|weaviate|chromadb|milvus)(?:$|\\?|/)"
+    source: [har, endpoints]
+    tags: [path, vectordb]
+
+  - id: devops-dashboard
+    name: "DevOps Dashboard Detected"
+    severity: high
+    pattern: "(?i)/(?:argocd|portainer|consul|nomad|vault|grafana|prometheus|terraform)(?:$|\\?|/)"
+    source: [har, endpoints]
+    tags: [path, devops]
+
+  - id: mcp-endpoint
+    name: "MCP Server Endpoint"
+    severity: medium
+    pattern: "(?i)/(?:mcp|\\.well-known/mcp\\.json)(?:$|\\?)"
+    source: [har, endpoints, js]
+    tags: [path, ai, mcp]
+
+  - id: quarkus-dev-path
+    name: "Quarkus Dev Endpoint"
+    severity: medium
+    pattern: "/q/(?:dev|health|metrics|openapi|swagger-ui|arc)(?:$|\\?|/)"
+    source: [har, endpoints]
+    tags: [path, quarkus]
+
+  - id: terraform-state
+    name: "Terraform State File"
+    severity: critical
+    pattern: "(?i)\\.tfstate|terraform\\.tfstate"
+    source: [har, endpoints, js]
+    tags: [path, devops, terraform]
+
+  - id: config-file-exposed
+    name: "Config File Exposed"
+    severity: high
+    pattern: "(?i)/(?:wrangler\\.toml|fly\\.toml|docker-compose\\.ya?ml|Dockerfile|prisma/schema\\.prisma|vercel\\.json|netlify\\.toml)(?:$|\\?)"
+    source: [har, endpoints]
+    tags: [path, config]
+
+  # ── Cloud Assets (2025+) ──
+
+  - id: ollama-endpoint
+    name: "Ollama Endpoint"
+    severity: high
+    pattern: "https?://[a-zA-Z0-9.-]+:11434"
+    source: [js, har]
+    tags: [cloud, ai, ollama]
+
+  - id: fly-io-app
+    name: "Fly.io App"
+    severity: info
+    pattern: "https?://[a-zA-Z0-9-]+\\.fly\\.dev"
+    source: [js, har]
+    tags: [cloud, fly]
+
+  - id: railway-app
+    name: "Railway App"
+    severity: info
+    pattern: "https?://[a-zA-Z0-9-]+\\.up\\.railway\\.app"
+    source: [js, har]
+    tags: [cloud, railway]
+
+  - id: neon-db
+    name: "Neon Database Connection"
+    severity: high
+    pattern: "(?i)postgres(?:ql)?://[^\\s\"']+\\.neon\\.tech"
+    source: [js, har]
+    tags: [cloud, neon, database]
+
+  - id: planetscale-db
+    name: "PlanetScale Database Connection"
+    severity: high
+    pattern: "(?i)mysql://[^\\s\"']+\\.psdb\\.cloud"
+    source: [js, har]
+    tags: [cloud, planetscale, database]
+
+  - id: turso-db
+    name: "Turso Database Connection"
+    severity: high
+    pattern: "libsql://[^\\s\"']+\\.turso\\.io"
+    source: [js, har]
+    tags: [cloud, turso, database]
