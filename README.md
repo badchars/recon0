@@ -382,25 +382,18 @@ The `smartfuzz` provider replaces traditional blind fuzzing with an intelligent,
 
 ## LLM Intelligence
 
-The `collector` stage optionally enriches the intelligence report with LLM analysis. When enabled, it sends the aggregated reconnaissance data to an OpenAI-compatible API and receives:
+The `collector` stage aggregates all pipeline data, cross-correlates findings, and generates structured investigation files for AI agent verification:
 
-1. **Critical Findings** — correlates secrets with host inventory and tech stack
-2. **False Positive Assessment** — uses context (CDN, tech, source) to filter noise
-3. **Attack Scenarios** — top 3-5 attack paths with specific hosts and endpoints
-4. **Subdomain Takeover Risk** — analyzes CNAME chains for dangling references
-5. **Recommendations** — prioritized next steps
+1. **IDOR Candidates** — parameterized endpoints with numeric/UUID IDs
+2. **SSRF Candidates** — URL-like query parameters (url, redirect, callback, etc.)
+3. **Exposed Secrets** — critical secrets correlated with same-file/host findings
+4. **Access Control Gaps** — admin/debug paths accessible without auth
+5. **Tech-Specific Vulns** — framework-specific findings (Spring Actuator, etc.)
+6. **Misconfigurations** — CORS reflection, missing security headers
+7. **Information Disclosure** — SQL errors, stack traces, internal IPs
+8. **Subdomain Takeover** — dangling CNAME records matching known fingerprints
 
-```yaml
-providers:
-  collector:
-    enabled: true
-    llm_enabled: true
-    llm_provider: openai        # or "ollama" for local models
-    llm_model: gpt-4o
-    llm_api_key: sk-...         # or RECON0_LLM_API_KEY env var
-    llm_base_url: ""            # custom endpoint (Ollama: http://localhost:11434/v1)
-    llm_max_tokens: 4096
-```
+Output: `investigations.json` (for AI agent) + `intel.json` (summary report)
 
 ---
 
@@ -546,13 +539,7 @@ providers:
     # custom_rules: /path/to/rules.yaml
 
   collector:
-    enabled: true
-    llm_enabled: false
-    llm_provider: openai        # openai | ollama
-    llm_model: gpt-4o
-    llm_api_key: ""             # or RECON0_LLM_API_KEY
-    llm_base_url: ""
-    llm_max_tokens: 4096
+    enabled: true               # Investigation generator + intel report
 
   smartfuzz:
     enabled: true
@@ -581,7 +568,6 @@ providers:
 | `RECON0_OUTPUT` | Output directory override |
 | `RECON0_LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) |
 | `RECON0_RESUME` | Resume mode (`true`/`false`) |
-| `RECON0_LLM_API_KEY` | OpenAI/Ollama API key |
 | `CHROME_PATH` | Chromium binary path override |
 
 ---

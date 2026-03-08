@@ -88,12 +88,8 @@ providers:
 
   collector:
     enabled: true
-    llm_enabled: false       # optional LLM enrichment
-    llm_provider: openai     # openai | ollama
-    llm_model: gpt-4o
-    llm_api_key: ""          # or set RECON0_LLM_API_KEY env var
-    llm_base_url: ""         # ollama: http://localhost:11434/v1
-    llm_max_tokens: 4096
+    # Generates investigations.json for AI agent verification
+    # and intel.json summary report
 
   smartfuzz:
     enabled: true            # smart fuzzer: known-path + discovery-based probing

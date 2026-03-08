@@ -90,14 +90,7 @@ func Defaults() *Config {
 			"naabu":    {Enabled: boolPtr(false), Extra: map[string]any{"top_ports": 100}},
 			"discover": {Enabled: boolPtr(true)},
 			"analyzer": {Enabled: boolPtr(true), Extra: map[string]any{"custom_rules": ""}},
-			"collector": {Enabled: boolPtr(true), Extra: map[string]any{
-				"llm_enabled":    false,
-				"llm_provider":   "openai",
-				"llm_model":      "gpt-oss-120b", // placeholder for a local LLM
-				"llm_api_key":    "",
-				"llm_base_url":   "",
-				"llm_max_tokens": 4096,
-			}},
+			"collector": {Enabled: boolPtr(true)},
 			"nuclei":      {Enabled: boolPtr(false), Extra: map[string]any{"severity": []any{"medium", "high", "critical"}}},
 			"smartfuzz": {Enabled: boolPtr(true), Extra: map[string]any{
 				"timeout":            "10s",
@@ -329,14 +322,5 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("RECON0_RESUME"); v == "false" {
 		cfg.Resume = false
-	}
-	if v := os.Getenv("RECON0_LLM_API_KEY"); v != "" {
-		if p, ok := cfg.Providers["collector"]; ok {
-			if p.Extra == nil {
-				p.Extra = make(map[string]any)
-			}
-			p.Extra["llm_api_key"] = v
-			cfg.Providers["collector"] = p
-		}
 	}
 }

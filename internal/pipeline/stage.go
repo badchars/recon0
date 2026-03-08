@@ -55,16 +55,16 @@ var Stages = []Stage{
 		Parallel:  false,
 	},
 	{
-		Name:      "collect",
-		Desc:      "Intelligence aggregation",
-		Providers: []string{"collector"},
-		Parallel:  false,
-	},
-	{
 		Name:      "vuln",
 		Desc:      "Vulnerability scanning",
 		Providers: []string{"nuclei", "smartfuzz"},
 		Parallel:  true,
+	},
+	{
+		Name:      "collect",
+		Desc:      "Intelligence aggregation + investigation generation",
+		Providers: []string{"collector"},
+		Parallel:  false,
 	},
 }
 
