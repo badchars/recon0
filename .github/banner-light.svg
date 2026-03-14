@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="700" height="180" viewBox="0 0 700 180">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#ffffff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f6f8fa;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#0891b2" />
+      <stop offset="50%" style="stop-color:#7c3aed" />
+      <stop offset="100%" style="stop-color:#c2410c" />
+    </linearGradient>
+    <linearGradient id="icon-fill" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#0891b2" />
+      <stop offset="100%" style="stop-color:#7c3aed" />
+    </linearGradient>
+  </defs>
+
+  <rect width="700" height="180" rx="12" fill="url(#bg)" stroke="#d0d7de" stroke-width="1"/>
+  <rect x="0" y="0" width="700" height="3" rx="1.5" fill="url(#accent)" />
+
+  <g transform="translate(60, 35)">
+    <circle cx="45" cy="45" r="42" fill="none" stroke="url(#icon-fill)" stroke-width="1.5" opacity="0.15"/>
+    <circle cx="45" cy="45" r="28" fill="none" stroke="url(#icon-fill)" stroke-width="1.5" opacity="0.25"/>
+    <circle cx="45" cy="45" r="14" fill="none" stroke="url(#icon-fill)" stroke-width="1.5" opacity="0.4"/>
+    <circle cx="45" cy="45" r="3.5" fill="url(#icon-fill)" opacity="0.8"/>
+    <line x1="45" y1="45" x2="45" y2="3" stroke="url(#icon-fill)" stroke-width="2" opacity="0.6"/>
+    <path d="M45 45 L35 5 L45 3 Z" fill="url(#icon-fill)" opacity="0.06"/>
+    <path d="M45 45 L55 5 L45 3 Z" fill="url(#icon-fill)" opacity="0.04"/>
+    <circle cx="62" cy="25" r="3" fill="#16a34a" opacity="0.8"/>
+    <circle cx="30" cy="58" r="2.5" fill="#c2410c" opacity="0.7"/>
+    <circle cx="70" cy="55" r="2" fill="#dc2626" opacity="0.7"/>
+    <circle cx="25" cy="32" r="2" fill="#16a34a" opacity="0.6"/>
+    <line x1="3" y1="45" x2="87" y2="45" stroke="url(#icon-fill)" stroke-width="0.7" opacity="0.1"/>
+    <line x1="45" y1="3" x2="45" y2="87" stroke="url(#icon-fill)" stroke-width="0.7" opacity="0.1"/>
+  </g>
+
+  <text x="170" y="68" font-family="'SF Pro Display', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="36" font-weight="700" fill="#1f2328" letter-spacing="-0.5">
+    recon0
+  </text>
+
+  <text x="170" y="98" font-family="'SF Pro Text', 'Segoe UI', system-ui, -apple-system, sans-serif" font-size="15" fill="#656d76" letter-spacing="0.2">
+    All-in-one bug bounty reconnaissance pipeline
+  </text>
+
+  <g transform="translate(170, 118)">
+    <rect x="0" y="0" width="82" height="26" rx="13" fill="#0891b2" opacity="0.08" stroke="#0891b2" stroke-width="1" stroke-opacity="0.25"/>
+    <text x="41" y="17" font-family="'SF Mono', 'Cascadia Code', monospace" font-size="11" fill="#0891b2" text-anchor="middle" font-weight="600">9 stages</text>
+
+    <rect x="94" y="0" width="100" height="26" rx="13" fill="#7c3aed" opacity="0.08" stroke="#7c3aed" stroke-width="1" stroke-opacity="0.25"/>
+    <text x="144" y="17" font-family="'SF Mono', 'Cascadia Code', monospace" font-size="11" fill="#7c3aed" text-anchor="middle" font-weight="600">13 providers</text>
+
+    <rect x="206" y="0" width="96" height="26" rx="13" fill="#c2410c" opacity="0.08" stroke="#c2410c" stroke-width="1" stroke-opacity="0.25"/>
+    <text x="254" y="17" font-family="'SF Mono', 'Cascadia Code', monospace" font-size="11" fill="#c2410c" text-anchor="middle" font-weight="600">60+ DSL rules</text>
+
+    <rect x="314" y="0" width="58" height="26" rx="13" fill="#16a34a" opacity="0.08" stroke="#16a34a" stroke-width="1" stroke-opacity="0.25"/>
+    <text x="343" y="17" font-family="'SF Mono', 'Cascadia Code', monospace" font-size="11" fill="#16a34a" text-anchor="middle" font-weight="600">Go</text>
+  </g>
+</svg>

@@ -1,17 +1,17 @@
 <p align="center">
+  <br>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/badchars/recon0/main/.github/banner-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://raw.githubusercontent.com/badchars/recon0/main/.github/banner-light.svg">
+    <img alt="recon0" src="https://raw.githubusercontent.com/badchars/recon0/main/.github/banner-dark.svg" width="700">
+  </picture>
+</p>
+
+<p align="center">
   <img src="https://img.shields.io/badge/Go-1.24-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/License-MIT-green?style=flat-square" alt="License">
   <img src="https://img.shields.io/badge/CDP-Chromium-4285F4?style=flat-square&logo=googlechrome&logoColor=white" alt="CDP">
-  <img src="https://img.shields.io/badge/Providers-13-blueviolet?style=flat-square" alt="Providers">
-  <img src="https://img.shields.io/badge/DSL_Rules-60+-orange?style=flat-square" alt="DSL Rules">
-</p>
-
-<h1 align="center">recon0</h1>
-
-<p align="center">
-  <strong>All-in-one bug bounty reconnaissance pipeline</strong><br>
-  <sub>From subdomain enumeration to vulnerability scanning — orchestrated, resumable, and LLM-enriched.</sub>
 </p>
 
 <p align="center">
