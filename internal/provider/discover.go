@@ -116,6 +116,8 @@ func (d *Discover) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 			"js_files_scanned":  jsChain.scannedCount,
 			"js_downloaded":     jsChain.downloadedCount,
 			"sourcemaps_parsed": jsChain.sourcemapCount,
+			"spa_frameworks":    len(jsChain.detectedSPA),
+			"spa_manifests":     jsChain.manifestCount,
 		},
 	}, nil
 }
@@ -133,13 +135,15 @@ type jsChainFollower struct {
 	ctx             context.Context
 	jsDir           string
 	emit            func(Endpoint)
-	manifest        map[string]string // filename → original URL
-	seenHash        map[string]bool   // SHA256 dedup for downloads
-	scannedFiles    map[string]bool   // already scanned local files
+	manifest        map[string]string           // filename → original URL
+	seenHash        map[string]bool             // SHA256 dedup for downloads
+	scannedFiles    map[string]bool             // already scanned local files
 	mu              sync.Mutex
 	scannedCount    int
 	downloadedCount int
 	sourcemapCount  int
+	detectedSPA     map[string]*spaFrameworkInfo // origin → framework info
+	manifestCount   int
 	client          *http.Client
 }
 
@@ -151,6 +155,7 @@ func newJSChainFollower(ctx context.Context, jsDir string, emit func(Endpoint), 
 		manifest:     manifest,
 		seenHash:     make(map[string]bool),
 		scannedFiles: make(map[string]bool),
+		detectedSPA:  make(map[string]*spaFrameworkInfo),
 		client:       &http.Client{Timeout: 15 * time.Second},
 	}
 }
@@ -192,6 +197,10 @@ func (jc *jsChainFollower) scanExistingFiles() {
 			queue = append(queue, jsQueueItem{url: ref, depth: 1})
 		}
 	}
+
+	// SPA manifest discovery — find hidden route chunks via build manifests
+	spaQueue := jc.discoverSPAManifests()
+	queue = append(queue, spaQueue...)
 
 	// Process queue: download → scan → enqueue new refs
 	for len(queue) > 0 {
