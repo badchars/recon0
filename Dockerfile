@@ -21,6 +21,7 @@ RUN go install github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest && 
     go install github.com/projectdiscovery/tlsx/cmd/tlsx@latest && \
     go install github.com/projectdiscovery/naabu/v2/cmd/naabu@latest && \
     go install github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest && \
+    go install github.com/projectdiscovery/alterx/cmd/alterx@latest && \
     go install github.com/owasp-amass/amass/v4/...@master
 
 # ── Stage 3: Final image ──

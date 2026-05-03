@@ -265,6 +265,26 @@ func (p *Pipeline) mergeStageOutputs(stage Stage, results []*provider.Result) ma
 		stats["dead"] = deadCount
 		p.logger.Infof("DNS Gate: %d alive, %d dead", count, deadCount)
 
+	case "permute":
+		// Idempotent rebuild of alive.txt = union(resolve raw, permute raw).
+		// Reading from raw/ instead of the existing alive.txt makes
+		// re-running this stage safe — same inputs, same output.
+		resolveSrc := filepath.Join(p.workDir, "raw", "dnsx.resolved.txt")
+		permuteSrc := filepath.Join(p.workDir, "raw", "permute.resolved.txt")
+		baseCount := merge.LineCount(resolveSrc)
+
+		total, _ := merge.TextDedup([]string{resolveSrc, permuteSrc}, stageOut)
+		added := total - baseCount
+		if added < 0 {
+			added = 0
+		}
+		candidates := merge.LineCount(filepath.Join(p.workDir, "raw", "alterx.permutations.txt"))
+
+		stats["candidates"] = candidates
+		stats["added"] = added
+		stats["total_alive"] = total
+		p.logger.Infof("Permute: +%d new alive hosts from %d candidates (total: %d)", added, candidates, total)
+
 	case "probe":
 		// httpx output is the live-hosts list (URLs with ports)
 		src := filepath.Join(p.workDir, "raw", "httpx.hosts.txt")
@@ -347,6 +367,16 @@ func (p *Pipeline) logFunnel(stageName string, stats map[string]int) {
 			if alive, ok2 := stats["alive"]; ok2 && subs > 0 {
 				pct := float64(alive) / float64(subs) * 100
 				p.logger.Metric(fmt.Sprintf("enum→resolve: %d → %d (%.1f%% alive)", subs, alive, pct))
+			}
+		}
+	case "permute":
+		if added, ok := stats["added"]; ok {
+			if total, ok2 := stats["total_alive"]; ok2 {
+				before := total - added
+				if before > 0 {
+					pct := float64(added) / float64(before) * 100
+					p.logger.Metric(fmt.Sprintf("resolve→permute: %d → %d (+%d, %.1f%%)", before, total, added, pct))
+				}
 			}
 		}
 	case "probe":

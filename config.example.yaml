@@ -50,6 +50,35 @@ providers:
     # record_types: [a, aaaa, cname]
     # takeover_check: true
 
+  permute:
+    enabled: true            # active recon — generates DNS traffic
+    enrich: true             # alterx -enrich: extract words from input
+    max_candidates: 50000    # safety cap on alterx output
+    # Pipeline: alive.txt → alterx (permutations) → dnsx (resolve)
+    # Wildcard IPs detected during resolve stage are filtered out.
+    # Requires: alterx + dnsx binaries in PATH.
+    patterns:
+      - "{{sub}}{{number}}.{{suffix}}"
+      - "{{sub}}-{{number}}.{{suffix}}"
+      - "{{number}}{{sub}}.{{suffix}}"
+      - "{{number}}-{{sub}}.{{suffix}}"
+      - "{{number}}.{{sub}}.{{suffix}}"
+      - "{{sub}}-{{word}}.{{suffix}}"
+      - "{{word}}-{{sub}}.{{suffix}}"
+      - "{{word}}.{{sub}}.{{suffix}}"
+      - "{{word}}{{number}}-{{sub}}.{{suffix}}"
+      - "{{word}}-{{number}}-{{sub}}.{{suffix}}"
+      - "{{word}}{{number}}.{{sub}}.{{suffix}}"
+      - "{{word}}-{{number}}.{{sub}}.{{suffix}}"
+      - "{{number}}{{word}}-{{sub}}.{{suffix}}"
+      - "{{number}}-{{word}}-{{sub}}.{{suffix}}"
+      - "{{number}}{{word}}.{{sub}}.{{suffix}}"
+      - "{{number}}-{{word}}.{{sub}}.{{suffix}}"
+      - "{{sub}}-{{word}}{{number}}.{{suffix}}"
+      - "{{sub}}-{{word}}-{{number}}.{{suffix}}"
+      - "{{sub}}-{{number}}{{word}}.{{suffix}}"
+      - "{{sub}}-{{number}}-{{word}}.{{suffix}}"
+
   httpx:
     enabled: true
     ports: [80, 443, 8080, 8443, 8000, 8081, 8888, 3000, 5000, 9090]

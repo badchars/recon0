@@ -24,6 +24,16 @@ var Stages = []Stage{
 		Parallel:  false,
 		IsGate:    true,
 	},
+	// permute stage temporarily disabled — alterx with -enrich on small
+	// alive lists explodes (e.g. 11 hosts → 47k candidates → httpx 15min
+	// timeout). Re-enable by uncommenting this block when permute config
+	// (max_candidates, pattern set) is tuned.
+	// {
+	// 	Name:      "permute",
+	// 	Desc:      "Permutation-based subdomain expansion",
+	// 	Providers: []string{"permute"},
+	// 	Parallel:  false,
+	// },
 	{
 		Name:      "probe",
 		Desc:      "HTTP probing + TLS",
@@ -75,6 +85,8 @@ func StageInput(workDir string, stageName string) string {
 		return workDir + "/input/domains.txt"
 	case "resolve":
 		return workDir + "/output/subdomains.txt"
+	case "permute":
+		return workDir + "/output/alive.txt"
 	case "probe":
 		return workDir + "/output/alive.txt"
 	case "crawl":
@@ -100,6 +112,8 @@ func StageOutput(workDir string, stageName string) string {
 	case "enum":
 		return workDir + "/output/subdomains.txt"
 	case "resolve":
+		return workDir + "/output/alive.txt"
+	case "permute":
 		return workDir + "/output/alive.txt"
 	case "probe":
 		return workDir + "/output/live-hosts.txt"
