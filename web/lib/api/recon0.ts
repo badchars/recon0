@@ -26,7 +26,8 @@ import type {
   Vulnerability,
 } from "./types";
 
-const DEFAULT_BASE_URL = "http://localhost:8484";
+const DEFAULT_BASE_URL =
+  process.env.NEXT_PUBLIC_RECON0_URL ?? "http://localhost:8484";
 
 let baseUrl = DEFAULT_BASE_URL;
 

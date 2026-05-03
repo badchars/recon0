@@ -1,7 +1,7 @@
 "use client";
 
 import { useHealth } from "@/lib/api/hooks";
-import { useSettings } from "@/lib/store/settings";
+import { getBaseUrl } from "@/lib/api/recon0";
 import { Button } from "@/components/ui/button";
 import { Plus, Wifi, WifiOff } from "lucide-react";
 import { useState } from "react";
@@ -9,7 +9,7 @@ import { CreateRunModal } from "@/components/create-run-modal";
 
 export function Topbar() {
   const { data, isError } = useHealth();
-  const instanceUrl = useSettings((s) => s.instanceUrl);
+  const instanceUrl = getBaseUrl();
   const [open, setOpen] = useState(false);
 
   const healthy = !!data?.ok && !isError;

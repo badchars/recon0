@@ -1,7 +1,5 @@
 "use client";
 
-import { useState } from "react";
-import { CheckCircle2, XCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -11,42 +9,14 @@ import {
   FieldLabel,
   FieldDescription,
 } from "@/components/ui/field";
-import { useSettings } from "@/lib/store/settings";
 import { useVulnerabilities } from "@/lib/api/hooks";
-import { recon0, setBaseUrl } from "@/lib/api/recon0";
-import { toast } from "sonner";
+import { getBaseUrl } from "@/lib/api/recon0";
 
 export default function SettingsPage() {
-  const instanceUrl = useSettings((s) => s.instanceUrl);
-  const setInstanceUrl = useSettings((s) => s.setInstanceUrl);
-  const [draft, setDraft] = useState(instanceUrl);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<"ok" | "fail" | null>(null);
+  const instanceUrl = getBaseUrl();
 
   const { data: vulns } = useVulnerabilities();
   const vulnCount = vulns?.length ?? 0;
-
-  async function testConnection() {
-    setTesting(true);
-    setTestResult(null);
-    setBaseUrl(draft);
-    try {
-      const r = await recon0.health();
-      setTestResult(r.ok ? "ok" : "fail");
-    } catch {
-      setTestResult("fail");
-    } finally {
-      setTesting(false);
-      // restore current URL — applying happens on Save
-      setBaseUrl(instanceUrl);
-    }
-  }
-
-  function save() {
-    const trimmed = draft.replace(/\/+$/, "");
-    setInstanceUrl(trimmed);
-    toast.success("Settings saved");
-  }
 
   function exportVulns() {
     const data = JSON.stringify(vulns ?? [], null, 2);
@@ -76,38 +46,19 @@ export default function SettingsPage() {
           <FieldGroup>
             <Field>
               <FieldLabel htmlFor="instanceUrl">URL</FieldLabel>
-              <div className="flex gap-2">
-                <Input
-                  id="instanceUrl"
-                  value={draft}
-                  onChange={(e) => setDraft(e.target.value)}
-                  placeholder="http://localhost:8484"
-                  className="font-mono"
-                />
-                <Button
-                  variant="outline"
-                  onClick={testConnection}
-                  disabled={testing}
-                >
-                  {testing ? "Testing…" : "Test"}
-                </Button>
-                <Button onClick={save} disabled={draft === instanceUrl}>
-                  Save
-                </Button>
-              </div>
+              <Input
+                id="instanceUrl"
+                value={instanceUrl}
+                readOnly
+                className="font-mono opacity-70 cursor-not-allowed"
+              />
               <FieldDescription>
-                recon0 daemon&apos;ın API adresi (default: 8484 portu).
+                <code className="font-mono">.env.local</code> dosyasındaki{" "}
+                <code className="font-mono">NEXT_PUBLIC_RECON0_URL</code>&apos;den
+                okunur. Değiştirmek için dosyayı düzenleyip{" "}
+                <code className="font-mono">npm run dev</code>&apos;i yeniden
+                başlatın.
               </FieldDescription>
-              {testResult === "ok" && (
-                <div className="flex items-center gap-1.5 text-xs text-emerald-400">
-                  <CheckCircle2 className="size-3.5" /> Connection OK
-                </div>
-              )}
-              {testResult === "fail" && (
-                <div className="flex items-center gap-1.5 text-xs text-destructive">
-                  <XCircle className="size-3.5" /> Connection failed
-                </div>
-              )}
             </Field>
           </FieldGroup>
         </CardContent>
