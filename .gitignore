@@ -21,7 +21,9 @@ vendor/
 Thumbs.db
 
 # Runs (scan output — don't commit)
-runs/
+# Path-anchored so it only matches the top-level scan output dir,
+# not nested dirs like web/components/runs/ which is real source code.
+/runs/
 
 # Config with secrets
 recon0.yaml
