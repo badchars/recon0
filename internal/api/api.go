@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -225,6 +226,32 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// hostnameRE accepts bare DNS labels (lowercase). Mirrors HOSTNAME_RE in
+// the panel — kept here as defence in depth against direct API callers.
+var hostnameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$`)
+
+// cleanHosts trims, lowercases, dedupes, and validates each entry.
+// Returns the kept entries and the rejected ones (for error reporting).
+func cleanHosts(in []string) (kept, rejected []string) {
+	seen := map[string]struct{}{}
+	for _, h := range in {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		if len(h) > 253 || !hostnameRE.MatchString(h) {
+			rejected = append(rejected, h)
+			continue
+		}
+		if _, dup := seen[h]; dup {
+			continue
+		}
+		seen[h] = struct{}{}
+		kept = append(kept, h)
+	}
+	return kept, rejected
+}
+
 func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -232,30 +259,53 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Domain  string `json:"domain"`
-		Program string `json:"program"`
+		Domain     string   `json:"domain"`      // deprecated single-host path
+		Program    string   `json:"program"`
+		Wildcards  []string `json:"wildcards"`
+		FixedHosts []string `json:"fixed_hosts"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	if req.Domain == "" {
-		http.Error(w, "domain is required", http.StatusBadRequest)
-		return
-	}
-	if req.Program == "" {
-		req.Program = req.Domain
+
+	// Back-compat: a bare {domain} payload is treated as a single
+	// wildcard. Matches the pre-buckets behaviour exactly.
+	if len(req.Wildcards) == 0 && len(req.FixedHosts) == 0 && req.Domain != "" {
+		req.Wildcards = []string{req.Domain}
+		w.Header().Set("Deprecation", "domain")
 	}
 
-	job := s.queue.Add(req.Domain, req.Program)
+	wildcards, badW := cleanHosts(req.Wildcards)
+	fixed, badF := cleanHosts(req.FixedHosts)
+	if rejected := append(badW, badF...); len(rejected) > 0 {
+		http.Error(w, "invalid hostnames: "+strings.Join(rejected, ", "), http.StatusBadRequest)
+		return
+	}
+	if len(wildcards) == 0 && len(fixed) == 0 {
+		http.Error(w, "wildcards or fixed_hosts is required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Program == "" {
+		if len(wildcards) > 0 {
+			req.Program = wildcards[0]
+		} else {
+			req.Program = fixed[0]
+		}
+	}
+
+	job := s.queue.AddBuckets(wildcards, fixed, req.Program)
 	pos := s.queue.Position(job.ID)
 
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"queue_id": job.ID,
-		"position": pos,
-		"domain":   job.Domain,
-		"program":  job.Program,
-		"status":   job.Status,
+		"queue_id":          job.ID,
+		"position":          pos,
+		"domain":            job.Domain,
+		"program":           job.Program,
+		"status":            job.Status,
+		"wildcards_count":   len(wildcards),
+		"fixed_hosts_count": len(fixed),
 	})
 }
 

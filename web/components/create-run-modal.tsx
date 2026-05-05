@@ -48,17 +48,46 @@ function parseDomains(raw: string): string[] {
   );
 }
 
-const schema = z.object({
-  program: z.string().min(1, "Pick a program"),
-  domainsRaw: z
-    .string()
-    .min(1, "At least one domain is required")
-    .refine((v) => parseDomains(v).length > 0, "No valid domains")
-    .refine(
-      (v) => parseDomains(v).every((d) => HOSTNAME_RE.test(d)),
-      "Invalid hostname (use bare host, no scheme/port)",
-    ),
-});
+// Bucket-split a single scope entry. Leading "*." marks a wildcard
+// (the apex below it gets enumerated); anything else is treated as a
+// fixed host (probed as-is, no subdomain enum). URL/port/path
+// fragments are stripped before classification.
+function classifyScopeEntry(
+  raw: string,
+): { kind: "wildcard" | "fixed"; host: string } | null {
+  const stripped = raw
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/[/?#].*$/, "")
+    .replace(/:\d+$/, "");
+  if (!stripped) return null;
+  if (stripped.startsWith("*.")) {
+    const host = stripped.slice(2);
+    return HOSTNAME_RE.test(host) ? { kind: "wildcard", host } : null;
+  }
+  return HOSTNAME_RE.test(stripped) ? { kind: "fixed", host: stripped } : null;
+}
+
+const hostsField = z
+  .string()
+  .refine(
+    (v) => parseDomains(v).every((d) => HOSTNAME_RE.test(d)),
+    "Invalid hostname (bare host only — no scheme, port, or *. prefix)",
+  );
+
+const schema = z
+  .object({
+    program: z.string().min(1, "Pick a program"),
+    wildcardsRaw: hostsField,
+    fixedHostsRaw: hostsField,
+  })
+  .refine(
+    (v) =>
+      parseDomains(v.wildcardsRaw).length + parseDomains(v.fixedHostsRaw).length >
+      0,
+    { message: "At least one host required", path: ["wildcardsRaw"] },
+  );
 
 type FormValues = z.infer<typeof schema>;
 
@@ -86,10 +115,13 @@ export function CreateRunModal({
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { program: defaultProgram ?? "", domainsRaw: "" },
+    defaultValues: {
+      program: defaultProgram ?? "",
+      wildcardsRaw: "",
+      fixedHostsRaw: "",
+    },
   });
 
-  // Sync defaultProgram if the modal is opened with a different value
   useEffect(() => {
     if (open && defaultProgram) {
       setValue("program", defaultProgram);
@@ -97,8 +129,11 @@ export function CreateRunModal({
   }, [open, defaultProgram, setValue]);
 
   const watchProgram = watch("program");
-  const watchDomains = watch("domainsRaw");
-  const domainCount = parseDomains(watchDomains || "").length;
+  const watchWildcards = watch("wildcardsRaw");
+  const watchFixed = watch("fixedHostsRaw");
+  const wildcardCount = parseDomains(watchWildcards || "").length;
+  const fixedCount = parseDomains(watchFixed || "").length;
+  const totalCount = wildcardCount + fixedCount;
 
   const selectedProgram = useMemo(
     () => (programs ?? []).find((p) => p.name === watchProgram),
@@ -111,38 +146,34 @@ export function CreateRunModal({
       toast.warning("Program has no scope defined");
       return;
     }
-    // Scope can contain bug-bounty notation (`*.example.com`, URLs, etc.)
-    // but recon0 needs bare apex hostnames. Strip leading wildcards and
-    // any URL fragments, dedupe.
-    const cleaned = Array.from(
-      new Set(
-        selectedProgram.scope
-          .map((s) =>
-            s
-              .trim()
-              .toLowerCase()
-              .replace(/^https?:\/\//, "")
-              .replace(/^\*\./, "")
-              .replace(/[/?#].*$/, "")
-              .replace(/:\d+$/, ""),
-          )
-          .filter((s) => HOSTNAME_RE.test(s)),
-      ),
-    );
-    if (cleaned.length === 0) {
+    const wildcards = new Set<string>();
+    const fixed = new Set<string>();
+    let skipped = 0;
+    for (const entry of selectedProgram.scope) {
+      const classified = classifyScopeEntry(entry);
+      if (!classified) {
+        skipped++;
+        continue;
+      }
+      if (classified.kind === "wildcard") wildcards.add(classified.host);
+      else fixed.add(classified.host);
+    }
+    if (wildcards.size === 0 && fixed.size === 0) {
       toast.warning("No scannable hostnames in scope", {
-        description: "Scope contains only wildcards/URLs — type a bare hostname manually",
+        description: "Add hosts manually below.",
       });
       return;
     }
-    setValue("domainsRaw", cleaned.join("\n"), {
+    setValue("wildcardsRaw", Array.from(wildcards).sort().join("\n"), {
       shouldValidate: true,
     });
-    if (cleaned.length < selectedProgram.scope.length) {
-      toast.info(
-        `${cleaned.length}/${selectedProgram.scope.length} entries normalized to bare hostnames`,
-      );
-    }
+    setValue("fixedHostsRaw", Array.from(fixed).sort().join("\n"), {
+      shouldValidate: true,
+    });
+    toast.success(
+      `${wildcards.size} wildcards · ${fixed.size} fixed hosts`,
+      skipped > 0 ? { description: `${skipped} entries skipped` } : undefined,
+    );
   }
 
   function onProgramCreated(p: Program) {
@@ -150,34 +181,30 @@ export function CreateRunModal({
   }
 
   async function onSubmit(values: FormValues) {
-    const domains = parseDomains(values.domainsRaw);
+    const wildcards = parseDomains(values.wildcardsRaw);
+    const fixed_hosts = parseDomains(values.fixedHostsRaw);
     setSubmitting(true);
-    let ok = 0;
-    const failed: string[] = [];
-
-    for (const d of domains) {
-      try {
-        await createRun.mutateAsync({ domain: d, program: values.program });
-        ok++;
-      } catch {
-        failed.push(d);
-      }
-    }
-    setSubmitting(false);
-
-    if (ok > 0) {
-      toast.success(
-        `${ok}/${domains.length} run${ok > 1 ? "s" : ""} queued`,
-        failed.length
-          ? { description: `Failed: ${failed.join(", ")}` }
-          : undefined,
-      );
-      reset({ program: defaultProgram ?? "", domainsRaw: "" });
-      onOpenChange(false);
-    } else {
-      toast.error("All requests failed", {
-        description: "Check API connectivity",
+    try {
+      const res = await createRun.mutateAsync({
+        program: values.program,
+        wildcards,
+        fixed_hosts,
       });
+      toast.success(`Run queued (${res.queue_id})`, {
+        description: `${wildcards.length} wildcards · ${fixed_hosts.length} fixed hosts`,
+      });
+      reset({
+        program: defaultProgram ?? "",
+        wildcardsRaw: "",
+        fixedHostsRaw: "",
+      });
+      onOpenChange(false);
+    } catch (err) {
+      toast.error("Could not queue run", {
+        description: err instanceof Error ? err.message : "Check API",
+      });
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -254,33 +281,66 @@ export function CreateRunModal({
                 )}
               </Field>
 
-              <Field data-invalid={!!errors.domainsRaw}>
-                <div className="flex items-center justify-between">
-                  <FieldLabel htmlFor="domainsRaw">Domain(s)</FieldLabel>
-                  {selectedProgram && selectedProgram.scope.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={fillFromScope}
-                      className="text-[11px] text-sky-400 hover:underline inline-flex items-center gap-1"
-                    >
-                      <Wand2 className="size-3" /> Fill from scope (
-                      {selectedProgram.scope.length})
-                    </button>
-                  )}
-                </div>
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-muted-foreground">
+                  Hosts ({totalCount})
+                </span>
+                {selectedProgram && selectedProgram.scope.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={fillFromScope}
+                    className="text-[11px] text-sky-400 hover:underline inline-flex items-center gap-1"
+                  >
+                    <Wand2 className="size-3" /> Fill from scope (
+                    {selectedProgram.scope.length})
+                  </button>
+                )}
+              </div>
+
+              <Field data-invalid={!!errors.wildcardsRaw}>
+                <FieldLabel htmlFor="wildcardsRaw">
+                  Wildcards{" "}
+                  <span className="text-muted-foreground font-normal">
+                    ({wildcardCount})
+                  </span>
+                </FieldLabel>
                 <Textarea
-                  id="domainsRaw"
-                  placeholder={"income.com.sg\napi.income.com.sg"}
-                  className="min-h-[110px] font-mono text-sm"
-                  aria-invalid={!!errors.domainsRaw}
-                  {...register("domainsRaw")}
+                  id="wildcardsRaw"
+                  placeholder={"target.com\nexample.org"}
+                  className="min-h-[80px] font-mono text-sm"
+                  aria-invalid={!!errors.wildcardsRaw}
+                  {...register("wildcardsRaw")}
                 />
                 <FieldDescription>
-                  Bare hostname per line (no scheme/port). Comma works too.
+                  Apex hosts to enumerate subdomains from (subfinder + amass).
                 </FieldDescription>
-                {errors.domainsRaw && (
+                {errors.wildcardsRaw && (
                   <FieldError
-                    errors={[{ message: errors.domainsRaw.message }]}
+                    errors={[{ message: errors.wildcardsRaw.message }]}
+                  />
+                )}
+              </Field>
+
+              <Field data-invalid={!!errors.fixedHostsRaw}>
+                <FieldLabel htmlFor="fixedHostsRaw">
+                  Fixed hosts{" "}
+                  <span className="text-muted-foreground font-normal">
+                    ({fixedCount})
+                  </span>
+                </FieldLabel>
+                <Textarea
+                  id="fixedHostsRaw"
+                  placeholder={"admin.target.com\nvpn.target.com"}
+                  className="min-h-[80px] font-mono text-sm"
+                  aria-invalid={!!errors.fixedHostsRaw}
+                  {...register("fixedHostsRaw")}
+                />
+                <FieldDescription>
+                  Probe these exact hosts; skip subdomain enum.
+                </FieldDescription>
+                {errors.fixedHostsRaw && (
+                  <FieldError
+                    errors={[{ message: errors.fixedHostsRaw.message }]}
                   />
                 )}
               </Field>
@@ -297,11 +357,9 @@ export function CreateRunModal({
               </Button>
               <Button
                 type="submit"
-                disabled={submitting || domainCount === 0 || !watchProgram}
+                disabled={submitting || totalCount === 0 || !watchProgram}
               >
-                {submitting
-                  ? "Submitting…"
-                  : `Queue ${domainCount || ""} run${domainCount === 1 ? "" : "s"}`.trim()}
+                {submitting ? "Submitting…" : "Queue run"}
               </Button>
             </DialogFooter>
           </form>

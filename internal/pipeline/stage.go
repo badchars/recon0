@@ -82,7 +82,7 @@ var Stages = []Stage{
 func StageInput(workDir string, stageName string) string {
 	switch stageName {
 	case "enum":
-		return workDir + "/input/domains.txt"
+		return workDir + "/input/wildcards.txt"
 	case "resolve":
 		return workDir + "/output/subdomains.txt"
 	case "permute":

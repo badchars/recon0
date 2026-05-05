@@ -20,6 +20,8 @@ type State struct {
 	Program      string                 `json:"program"`
 	Domain       string                 `json:"domain"`
 	Domains      []string               `json:"domains,omitempty"`
+	Wildcards    []string               `json:"wildcards,omitempty"`
+	FixedHosts   []string               `json:"fixed_hosts,omitempty"`
 	StartedAt    string                 `json:"started_at"`
 	FinishedAt   *string                `json:"finished_at"`
 	Status       string                 `json:"status"`
@@ -77,24 +79,35 @@ type StateError struct {
 	Fatal    bool   `json:"fatal"`
 }
 
-// NewState creates a fresh pipeline state.
+// NewState creates a fresh pipeline state from a flat domain list. Treats
+// the list as wildcards (back-compat with single-bucket callers).
 func NewState(path, jobID, program string, domains []string) *State {
+	return NewStateBuckets(path, jobID, program, domains, nil)
+}
+
+// NewStateBuckets creates a fresh pipeline state with explicit wildcard /
+// fixed-host buckets. Domain/Domains are populated with the union so the
+// existing UI and Query() output keep rendering without changes.
+func NewStateBuckets(path, jobID, program string, wildcards, fixedHosts []string) *State {
+	domains := unionStrings(wildcards, fixedHosts)
 	domain := ""
 	if len(domains) > 0 {
 		domain = domains[0]
 	}
 	return &State{
-		path:      path,
-		Version:   1,
-		JobID:     jobID,
-		Program:   program,
-		Domain:    domain,
-		Domains:   domains,
-		StartedAt: nowUTC(),
-		Status:    "running",
-		Stages:    make(map[string]*StageState),
-		Errors:    []StateError{},
-		Summary:   make(map[string]int),
+		path:       path,
+		Version:    2,
+		JobID:      jobID,
+		Program:    program,
+		Domain:     domain,
+		Domains:    domains,
+		Wildcards:  wildcards,
+		FixedHosts: fixedHosts,
+		StartedAt:  nowUTC(),
+		Status:     "running",
+		Stages:     make(map[string]*StageState),
+		Errors:     []StateError{},
+		Summary:    make(map[string]int),
 	}
 }
 

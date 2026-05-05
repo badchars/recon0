@@ -10,16 +10,22 @@ import (
 )
 
 // Job represents a scan job in the queue.
+//
+// Domain is a denormalised display field — the first host across both
+// buckets — kept for the panel UI which renders a single "domain" cell.
+// Wildcards and FixedHosts hold the canonical scan input.
 type Job struct {
-	ID        string  `json:"id"`
-	Domain    string  `json:"domain"`
-	Program   string  `json:"program"`
-	Status    string  `json:"status"` // queued | running | done | failed | cancelled
-	CreatedAt string  `json:"created_at"`
-	StartedAt string  `json:"started_at,omitempty"`
-	DoneAt    string  `json:"done_at,omitempty"`
-	RunID     string  `json:"run_id,omitempty"`
-	Error     string  `json:"error,omitempty"`
+	ID         string   `json:"id"`
+	Domain     string   `json:"domain"`
+	Program    string   `json:"program"`
+	Wildcards  []string `json:"wildcards,omitempty"`
+	FixedHosts []string `json:"fixed_hosts,omitempty"`
+	Status     string   `json:"status"` // queued | running | done | failed | cancelled
+	CreatedAt  string   `json:"created_at"`
+	StartedAt  string   `json:"started_at,omitempty"`
+	DoneAt     string   `json:"done_at,omitempty"`
+	RunID      string   `json:"run_id,omitempty"`
+	Error      string   `json:"error,omitempty"`
 }
 
 // Queue manages scan jobs with disk persistence.
@@ -37,18 +43,33 @@ func New(file string) *Queue {
 	return q
 }
 
-// Add enqueues a new scan job and returns it.
+// Add enqueues a single-domain scan, treating the domain as a wildcard
+// (subfinder/amass will enumerate). Back-compat shim around AddBuckets.
 func (q *Queue) Add(domain, program string) *Job {
+	return q.AddBuckets([]string{domain}, nil, program)
+}
+
+// AddBuckets enqueues a scan with explicit wildcard / fixed-host buckets.
+// Domain is set to the first host across the union for panel display.
+func (q *Queue) AddBuckets(wildcards, fixedHosts []string, program string) *Job {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	q.counter++
+	display := ""
+	if len(wildcards) > 0 {
+		display = wildcards[0]
+	} else if len(fixedHosts) > 0 {
+		display = fixedHosts[0]
+	}
 	job := &Job{
-		ID:        fmt.Sprintf("q-%03d", q.counter),
-		Domain:    domain,
-		Program:   program,
-		Status:    "queued",
-		CreatedAt: nowUTC(),
+		ID:         fmt.Sprintf("q-%03d", q.counter),
+		Domain:     display,
+		Program:    program,
+		Wildcards:  wildcards,
+		FixedHosts: fixedHosts,
+		Status:     "queued",
+		CreatedAt:  nowUTC(),
 	}
 	q.jobs = append(q.jobs, job)
 	q.save()
@@ -218,12 +239,17 @@ func (q *Queue) load() {
 	if json.Unmarshal(data, &ds) == nil {
 		q.jobs = ds.Jobs
 		q.counter = ds.Counter
-		// Reset any "running" jobs to "queued" (crash recovery)
 		for _, j := range q.jobs {
+			// Reset any "running" jobs to "queued" (crash recovery).
 			if j.Status == "running" {
 				j.Status = "queued"
 				j.StartedAt = ""
 				j.RunID = ""
+			}
+			// v1 upgrade: old jobs only have Domain set. Treat the domain
+			// as a wildcard so re-running them produces today's behaviour.
+			if len(j.Wildcards) == 0 && len(j.FixedHosts) == 0 && j.Domain != "" {
+				j.Wildcards = []string{j.Domain}
 			}
 		}
 	}

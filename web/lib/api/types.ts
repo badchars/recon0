@@ -58,6 +58,8 @@ export interface RunState {
   program: string;
   domain: string;
   domains?: string[];
+  wildcards?: string[];
+  fixed_hosts?: string[];
   started_at: string;
   finished_at: string | null;
   status: RunStatus;
@@ -85,6 +87,8 @@ export interface QueueJob {
   id: string;
   domain: string;
   program: string;
+  wildcards?: string[];
+  fixed_hosts?: string[];
   status: JobStatus;
   created_at: string;
   started_at?: string;
@@ -110,12 +114,22 @@ export function isIdle(s: StatusResponse | undefined | null): s is IdleStatus {
   return !!s && (s as IdleStatus).status === "idle";
 }
 
+export interface ScanRequest {
+  program?: string;
+  wildcards?: string[];
+  fixed_hosts?: string[];
+  /** @deprecated — use wildcards. Server treats single domain as a wildcard. */
+  domain?: string;
+}
+
 export interface ScanResponse {
   queue_id: string;
   position: number;
   domain: string;
   program: string;
   status: JobStatus;
+  wildcards_count?: number;
+  fixed_hosts_count?: number;
 }
 
 export interface LogsResponse {

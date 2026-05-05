@@ -17,6 +17,7 @@ import type {
   Program,
   QueueState,
   RunSummary,
+  ScanRequest,
   ScanResponse,
   SmartfuzzFinding,
   StatusResponse,
@@ -82,7 +83,7 @@ export const recon0 = {
 
   queue: () => request<QueueState>("/api/queue"),
 
-  scan: (body: { domain: string; program?: string }) =>
+  scan: (body: ScanRequest) =>
     request<ScanResponse>("/api/scan", {
       method: "POST",
       body: JSON.stringify(body),

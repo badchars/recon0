@@ -104,40 +104,31 @@ func printUsage() {
 
 func cmdRun() {
 	if len(os.Args) < 3 {
-		fmt.Fprintln(os.Stderr, "Usage: recon0 run <domain|d1,d2,...> [-l file] [--program NAME] [--config PATH] [--from-stage STAGE]")
+		fmt.Fprintln(os.Stderr, "Usage: recon0 run <domain|d1,d2,...> [-l file] [--wildcards W1,W2] [--fixed-hosts F1,F2] [--program NAME] [--config PATH] [--from-stage STAGE]")
 		os.Exit(1)
 	}
 
-	var domains []string
+	var wildcards []string
+	var fixedHosts []string
 	configPath := ""
 	fromStage := ""
 	program := ""
 
-	// Parse: first check if -l/--list is the second arg
+	// Positional arg or -l/--list — legacy single-bucket form. Treats
+	// the input as wildcards (subfinder/amass enumerates from them).
 	startIdx := 3
 	if os.Args[2] == "-l" || os.Args[2] == "--list" {
 		if len(os.Args) < 4 {
 			fmt.Fprintln(os.Stderr, "Error: -l requires a file path")
 			os.Exit(1)
 		}
-		domains = readDomainFile(os.Args[3])
+		wildcards = readDomainFile(os.Args[3])
 		startIdx = 4
 	} else if strings.Contains(os.Args[2], ",") {
-		for _, d := range strings.Split(os.Args[2], ",") {
-			d = strings.TrimSpace(d)
-			if d != "" {
-				domains = append(domains, d)
-			}
-		}
+		wildcards = parseCSVList(os.Args[2])
 	} else {
-		domains = []string{os.Args[2]}
+		wildcards = []string{os.Args[2]}
 	}
-
-	if len(domains) == 0 {
-		fmt.Fprintln(os.Stderr, "Error: no domains provided")
-		os.Exit(1)
-	}
-	program = domains[0]
 
 	for i := startIdx; i < len(os.Args); i++ {
 		switch os.Args[i] {
@@ -158,9 +149,31 @@ func cmdRun() {
 			}
 		case "-l", "--list":
 			if i+1 < len(os.Args) {
-				domains = readDomainFile(os.Args[i+1])
+				wildcards = append(wildcards, readDomainFile(os.Args[i+1])...)
 				i++
 			}
+		case "--wildcards":
+			if i+1 < len(os.Args) {
+				wildcards = append(wildcards, parseCSVList(os.Args[i+1])...)
+				i++
+			}
+		case "--fixed-hosts":
+			if i+1 < len(os.Args) {
+				fixedHosts = append(fixedHosts, parseCSVList(os.Args[i+1])...)
+				i++
+			}
+		}
+	}
+
+	if len(wildcards) == 0 && len(fixedHosts) == 0 {
+		fmt.Fprintln(os.Stderr, "Error: no hosts provided (positional, -l, --wildcards, or --fixed-hosts)")
+		os.Exit(1)
+	}
+	if program == "" {
+		if len(wildcards) > 0 {
+			program = wildcards[0]
+		} else {
+			program = fixedHosts[0]
 		}
 	}
 
@@ -206,12 +219,24 @@ func cmdRun() {
 				os.Exit(1)
 			}
 			state.Status = "running"
+
+			// Resume: pull the buckets from the persisted state. v1 state.json
+			// files (no buckets) fall back to Domains as wildcards, matching
+			// the pre-buckets default behaviour.
+			wildcards = state.Wildcards
+			fixedHosts = state.FixedHosts
+			if len(wildcards) == 0 && len(fixedHosts) == 0 {
+				wildcards = state.Domains
+				if len(wildcards) == 0 && state.Domain != "" {
+					wildcards = []string{state.Domain}
+				}
+			}
 		} else {
 			fmt.Fprintf(os.Stderr, "No existing run found for program '%s'. Run without --from-stage first.\n", program)
 			os.Exit(1)
 		}
 	} else {
-		logger, logDir, runDir, state = setupRun(cfg, program, domains)
+		logger, logDir, runDir, state = setupRun(cfg, program, wildcards, fixedHosts)
 	}
 	defer logger.Close()
 	_ = logDir
@@ -236,7 +261,7 @@ func cmdRun() {
 
 	p := pipeline.New(cfg, res, logger, state, runDir)
 	p.FromStage = fromStage
-	if err := p.Run(ctx, domains, program); err != nil {
+	if err := p.RunBuckets(ctx, wildcards, fixedHosts, program); err != nil {
 		logger.Errorf("Pipeline error: %v", err)
 		os.Exit(1)
 	}
@@ -351,8 +376,7 @@ func cmdServe() {
 		q.MarkRunning(job.ID, jobID)
 
 		stateFile := filepath.Join(runDir, "state.json")
-		jobDomains := []string{job.Domain}
-		state := pipeline.NewState(stateFile, jobID, job.Program, jobDomains)
+		state := pipeline.NewStateBuckets(stateFile, jobID, job.Program, job.Wildcards, job.FixedHosts)
 		srv.SetState(state)
 
 		// Job-specific log file
@@ -362,10 +386,11 @@ func cmdServe() {
 		}
 		jobLogger := log.New(logLevel, cfg.Log.Format, logFile)
 
-		jobLogger.Infof("Starting scan: %s (%s) — queue job %s", jobID, job.Domain, job.ID)
+		jobLogger.Infof("Starting scan: %s (%d wildcards, %d fixed) — queue job %s",
+			jobID, len(job.Wildcards), len(job.FixedHosts), job.ID)
 
 		p := pipeline.New(cfg, res, jobLogger, state, runDir)
-		if err := p.Run(ctx, jobDomains, job.Program); err != nil {
+		if err := p.RunBuckets(ctx, job.Wildcards, job.FixedHosts, job.Program); err != nil {
 			jobLogger.Errorf("Pipeline error: %v", err)
 			q.MarkFailed(job.ID, err.Error())
 		} else {
@@ -970,7 +995,19 @@ func isContainer() bool {
 
 // ── helpers ──
 
-func setupRun(cfg *config.Config, program string, domains []string) (*log.Logger, string, string, *pipeline.State) {
+// parseCSVList splits a comma-separated string into trimmed non-empty entries.
+func parseCSVList(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+func setupRun(cfg *config.Config, program string, wildcards, fixedHosts []string) (*log.Logger, string, string, *pipeline.State) {
 	os.MkdirAll(cfg.OutputDir, 0755)
 	runDir, isResume := pipeline.ResolveRunDir(cfg.OutputDir, program, cfg.Resume)
 	os.MkdirAll(runDir, 0755)
@@ -1007,7 +1044,7 @@ func setupRun(cfg *config.Config, program string, domains []string) (*log.Logger
 		state.Status = "running"
 		logger.Info("Resuming pipeline: " + jobID)
 	} else {
-		state = pipeline.NewState(stateFile, jobID, program, domains)
+		state = pipeline.NewStateBuckets(stateFile, jobID, program, wildcards, fixedHosts)
 	}
 
 	return logger, logDir, runDir, state

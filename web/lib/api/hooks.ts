@@ -6,7 +6,12 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { recon0 } from "./recon0";
-import { isIdle, type RunSummary, type StatusResponse } from "./types";
+import {
+  isIdle,
+  type RunSummary,
+  type ScanRequest,
+  type StatusResponse,
+} from "./types";
 
 const POLL_FAST = 2000;
 const POLL_SLOW = 10000;
@@ -77,8 +82,7 @@ export function useLogs(runId: string | undefined, lines = 200) {
 export function useCreateRun() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: { domain: string; program?: string }) =>
-      recon0.scan(body),
+    mutationFn: (body: ScanRequest) => recon0.scan(body),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["queue"] });
       qc.invalidateQueries({ queryKey: ["runs"] });

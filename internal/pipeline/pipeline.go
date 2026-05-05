@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sort"
 	"sync"
 	"time"
 
@@ -41,8 +42,21 @@ func New(cfg *config.Config, res *config.Resources, logger *log.Logger, state *S
 	}
 }
 
-// Run executes the full pipeline for the given domains.
+// Run is a back-compat wrapper — treats the flat domain list as wildcards
+// (subfinder/amass will enumerate from them). New callers should use
+// RunBuckets directly to distinguish wildcards (enumerate) from
+// fixed_hosts (skip enum, just probe as-is).
 func (p *Pipeline) Run(ctx context.Context, domains []string, program string) error {
+	return p.RunBuckets(ctx, domains, nil, program)
+}
+
+// RunBuckets executes the pipeline with two scope buckets:
+//   - wildcards:   hosts to feed into the enum stage (subfinder/amass).
+//   - fixedHosts:  hosts to inject post-enum, bypassing subdomain discovery.
+//
+// At least one bucket should be non-empty; an all-empty call still runs
+// but the resolve gate will fail.
+func (p *Pipeline) RunBuckets(ctx context.Context, wildcards, fixedHosts []string, program string) error {
 	// Create directory structure
 	dirs := []string{
 		p.workDir + "/input",
@@ -56,14 +70,20 @@ func (p *Pipeline) Run(ctx context.Context, domains []string, program string) er
 		os.MkdirAll(d, 0755)
 	}
 
-	// Write input domain file
+	// Write the bucket input files. wildcards.txt feeds enum; fixed-hosts.txt
+	// is merged into enum's output by mergeStageOutputs. domains.txt holds
+	// the union for backwards-compat with anything still grepping it.
+	wildcardFile := filepath.Join(p.workDir, "input", "wildcards.txt")
+	fixedFile := filepath.Join(p.workDir, "input", "fixed-hosts.txt")
 	domainFile := filepath.Join(p.workDir, "input", "domains.txt")
-	os.WriteFile(domainFile, []byte(strings.Join(domains, "\n")+"\n"), 0644)
+	writeLinesFile(wildcardFile, wildcards)
+	writeLinesFile(fixedFile, fixedHosts)
+	writeLinesFile(domainFile, unionStrings(wildcards, fixedHosts))
 
 	// Record resources in state
 	p.state.SetResources(p.res.Cores, p.res.RamGB, p.res.ThreadsFull, p.res.ThreadsHeavy, p.res.ThreadsLight)
 
-	p.logger.Infof("Pipeline starting: %s (%d domains: %s)", p.state.JobID, len(domains), strings.Join(domains, ", "))
+	p.logger.Infof("Pipeline starting: %s (%d wildcards, %d fixed hosts)", p.state.JobID, len(wildcards), len(fixedHosts))
 	p.logger.Infof("Resources: %d cores, %dGB RAM", p.res.Cores, p.res.RamGB)
 
 	// --from-stage: reset state for stages from that point onwards
@@ -141,6 +161,20 @@ func (p *Pipeline) runStage(ctx context.Context, stage Stage) error {
 	p.state.UpdateStage(stage.Name, "running", nil)
 
 	input := StageInput(p.workDir, stage.Name)
+
+	// Fixed-hosts-only mode: when enum's input (wildcards.txt) is empty,
+	// skip subfinder/amass and run the merge alone. The merge picks up
+	// fixed-hosts.txt and seeds output/subdomains.txt directly, so the
+	// resolve gate can still pass with just the user-supplied hosts.
+	if stage.Name == "enum" && merge.LineCount(input) == 0 {
+		p.logger.Infof("Stage 'enum': no wildcards — skipping enum providers, fixed hosts only")
+		for _, name := range stage.Providers {
+			p.state.UpdateProvider(stage.Name, name, "skipped", 0, 0, "")
+		}
+		stats := p.mergeStageOutputs(stage, nil)
+		p.state.UpdateStage(stage.Name, "done", stats)
+		return nil
+	}
 
 	// Collect enabled providers for this stage
 	var enabledProviders []provider.Provider
@@ -250,7 +284,13 @@ func (p *Pipeline) mergeStageOutputs(stage Stage, results []*provider.Result) ma
 
 	switch stage.Name {
 	case "enum":
+		// Merge enum outputs (subfinder/amass) with the fixed-hosts bucket.
+		// Fixed hosts bypass enum entirely — they're already known, just
+		// need to flow through resolve/probe/etc. like any other host.
+		// TextDedup silently skips missing files, so a non-existent
+		// fixed-hosts.txt is a no-op.
 		files := merge.CollectByPattern(p.workDir+"/raw", "subdomains")
+		files = append(files, filepath.Join(p.workDir, "input", "fixed-hosts.txt"))
 		count, _ := merge.TextDedup(files, stageOut)
 		stats["subdomains"] = count
 		p.logger.Infof("Merged subdomains: %d unique", count)
@@ -463,6 +503,39 @@ func copyFile(src, dst string) {
 	}
 	os.MkdirAll(filepath.Dir(dst), 0755)
 	os.WriteFile(dst, data, 0644)
+}
+
+// writeLinesFile writes one host per line. Empty input still creates the
+// file (size 0) so downstream code can rely on the path existing.
+func writeLinesFile(path string, lines []string) {
+	var buf strings.Builder
+	for _, l := range lines {
+		if l == "" {
+			continue
+		}
+		buf.WriteString(l)
+		buf.WriteByte('\n')
+	}
+	os.WriteFile(path, []byte(buf.String()), 0644)
+}
+
+// unionStrings returns the deduped, sorted union of the given slices.
+func unionStrings(slices ...[]string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, s := range slices {
+		for _, v := range s {
+			if v == "" {
+				continue
+			}
+			if _, ok := seen[v]; !ok {
+				seen[v] = struct{}{}
+				out = append(out, v)
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func countFiles(dir, ext string) int {
