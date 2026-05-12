@@ -199,7 +199,12 @@ export const recon0 = {
       const text = await res.text().catch(() => "");
       throw new ApiError(res.status, text || res.statusText);
     }
-    return res.json();
+    const data = (await res.json()) as AttachmentUploadResponse;
+    // Backend returns a relative path; make it absolute so the <img src>
+    // resolves to the API origin (web is usually served from a different port).
+    return data.url.startsWith("http")
+      ? data
+      : { ...data, url: `${baseUrl}${data.url}` };
   },
 
   deleteVulnAttachment: (vulnID: string, filename: string) =>

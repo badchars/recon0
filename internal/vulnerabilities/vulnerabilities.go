@@ -315,15 +315,31 @@ func (s *Store) DeleteAttachment(vulnID, filename string) error {
 }
 
 // sanitizeFilename keeps only safe chars and rejects path-traversal tricks.
+// Unsafe characters (spaces, parens, non-ASCII) are replaced with '_' so
+// common OS screenshot filenames go through instead of being rejected.
 func sanitizeFilename(name string) string {
 	name = filepath.Base(name)
 	if name == "." || name == ".." || name == "" || strings.HasPrefix(name, ".") {
 		return ""
 	}
-	if !safeFileNameRe.MatchString(name) {
+	var b strings.Builder
+	b.Grow(len(name))
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('_')
+		}
+	}
+	cleaned := strings.TrimLeft(b.String(), ".-_")
+	if cleaned == "" || !safeFileNameRe.MatchString(cleaned) {
 		return ""
 	}
-	return name
+	return cleaned
 }
 
 // ── persistence ──
