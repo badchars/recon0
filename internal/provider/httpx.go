@@ -26,7 +26,7 @@ func (h *Httpx) Run(ctx context.Context, opts *RunOpts) (*Result, error) {
 
 	// Hard timeout: kill httpx after N minutes regardless of progress.
 	// Partial results are preserved — the error path already handles this.
-	hardTimeoutMin := config.GetInt(extra, "hard_timeout", 120)
+	hardTimeoutMin := config.GetInt(extra, "hard_timeout", 600)
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(hardTimeoutMin)*time.Minute)
 	defer cancel()
 	responsesDir := filepath.Join(opts.WorkDir, "responses")
