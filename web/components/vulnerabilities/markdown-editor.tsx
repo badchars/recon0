@@ -3,9 +3,23 @@
 import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import remarkBreaks from "remark-breaks";
 import "@uiw/react-md-editor/markdown-editor.css";
 import "@uiw/react-markdown-preview/markdown.css";
 import { recon0 } from "@/lib/api/recon0";
+import { remarkBugcrowdStrictBlocks } from "@/lib/markdown/bugcrowd-strict";
+
+// Make the preview render with the same rules Bugcrowd uses, so what you author
+// here matches what Bugcrowd shows after you paste:
+//   - remarkBugcrowdStrictBlocks: a block with no blank line before it gets
+//     absorbed into the preceding paragraph (Redcarpet strictness).
+//   - remarkBreaks: a single newline becomes <br> (hard_wrap).
+// The editor composes plugins as [remarkAlert, ...ours, remarkGfm], so GFM
+// tables and fenced code blocks are still parsed. Order matters: strict-block
+// absorption runs before remark-breaks.
+const PREVIEW_OPTIONS = {
+  remarkPlugins: [remarkBugcrowdStrictBlocks, remarkBreaks],
+};
 
 const MDEditor = dynamic(() => import("@uiw/react-md-editor"), {
   ssr: false,
@@ -118,7 +132,8 @@ export function MarkdownEditor({ value, onChange, height = 320, vulnID }: Props)
         value={value}
         onChange={(v) => onChange(v ?? "")}
         height={height}
-        preview="edit"
+        preview="live"
+        previewOptions={PREVIEW_OPTIONS}
       />
     </div>
   );

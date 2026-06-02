@@ -172,7 +172,7 @@ func TestDetectAngularFromContent(t *testing.T) {
 		ctx:   context.Background(),
 		jsDir: tmpDir,
 		manifest: map[string]string{
-			"main.js": "https://por.etoro.com/main-KQPXVTEK.js",
+			"main.js": "https://por.example.com/main-KQPXVTEK.js",
 		},
 		seenHash:     make(map[string]bool),
 		scannedFiles: make(map[string]bool),
@@ -181,7 +181,7 @@ func TestDetectAngularFromContent(t *testing.T) {
 
 	jc.detectSPAFrameworks()
 
-	info, ok := jc.detectedSPA["https://por.etoro.com"]
+	info, ok := jc.detectedSPA["https://por.example.com"]
 	if !ok {
 		t.Fatal("expected Angular detection from content")
 	}
