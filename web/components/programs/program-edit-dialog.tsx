@@ -85,7 +85,7 @@ export function ProgramEditDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-2xl">
+      <DialogContent className="sm:max-w-2xl max-h-[calc(100dvh-2rem)] grid-rows-[auto_minmax(0,1fr)_auto] overflow-hidden">
         <DialogHeader>
           <DialogTitle>Edit {program.name}</DialogTitle>
           <DialogDescription>
@@ -93,13 +93,13 @@ export function ProgramEditDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <FieldGroup>
+        <FieldGroup className="overflow-y-auto min-h-0">
           <Field>
             <FieldLabel>Description</FieldLabel>
             <Textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              className="min-h-[70px]"
+              className="field-sizing-fixed min-h-[120px] max-h-[40vh] overflow-y-auto"
             />
           </Field>
 
@@ -133,7 +133,7 @@ export function ProgramEditDialog({
               value={scopeText}
               onChange={(e) => setScopeText(e.target.value)}
               placeholder={"*.income.com.sg\napi.income.com.sg"}
-              className="min-h-[120px] font-mono text-sm"
+              className="field-sizing-fixed min-h-[120px] max-h-[40vh] overflow-y-auto font-mono text-sm"
             />
             <FieldDescription>One asset per line.</FieldDescription>
           </Field>

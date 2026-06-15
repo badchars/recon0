@@ -266,7 +266,7 @@ export function ProgramForm({
             value={form.description}
             onChange={(e) => setField("description", e.target.value)}
             placeholder="Singapore insurance giant — primary scope is web + mobile API."
-            className="min-h-[80px]"
+            className="field-sizing-fixed min-h-[120px] max-h-[50vh] overflow-y-auto"
           />
         </Field>
 
@@ -320,7 +320,7 @@ export function ProgramForm({
             value={form.scopeText}
             onChange={(e) => setField("scopeText", e.target.value)}
             placeholder={"*.income.com.sg\napi.income.com.sg"}
-            className="min-h-[120px] font-mono text-sm"
+            className="field-sizing-fixed min-h-[120px] max-h-[50vh] overflow-y-auto font-mono text-sm"
           />
           <FieldDescription>
             One asset per line. Used as the asset dropdown in vulnerability

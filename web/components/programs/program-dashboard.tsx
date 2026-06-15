@@ -120,7 +120,7 @@ export function ProgramDashboard({ name }: { name: string }) {
               )}
             </div>
             {p.description && (
-              <p className="text-sm text-muted-foreground mt-1">
+              <p className="text-sm text-muted-foreground mt-1 max-h-[30vh] overflow-y-auto whitespace-pre-wrap">
                 {p.description}
               </p>
             )}
